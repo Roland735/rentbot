@@ -1,0 +1,56 @@
+Step 1 — Twilio outbound helper
+- Create src/lib/twilio.js with sendWhatsApp(to, body, media=[])
+- Use env: TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN, TWILIO_WHATSAPP_FROM
+- Export sendWhatsApp and reuse across routes
+
+Step 2 — Twilio inbound webhook hardening
+- In src/app/api/twilio/webhook/route.js verify Twilio signature
+- Normalize From/Body; route commands SEARCH, PHOTOS, YES, REPORT, LIST, HELP, STOP
+- Use sendWhatsApp to reply; keep messages compact per README
+
+Step 3 — SEARCH formatting and deduction-after-send
+- Create src/lib/format.js with formatSearchResults(results, balanceAfter)
+- In /api/search: build message, send via sendWhatsApp, on success updateCredits(-1) and record transaction
+- Cap results to 10 and order by createdAt desc
+
+Step 4 — PHOTOS flow and media sending
+- In /api/photos/request: create pending request and send confirmation message
+- In /api/photos/confirm: check pending, updateCredits(-2) after successful media send
+- Pull images from listing.external_images or CDN; send as mediaUrl array
+
+Step 5 — BUY credits and receipts
+- Implement real provider in src/lib/paynow.js (createPush, verifyWebhookSignature)
+- In /api/buy: start push, record pending transaction with reference
+- In /api/paynow/webhook: verify signature, credit user on success, send receipt via sendWhatsApp
+
+Step 6 — LIST and EDIT lifecycle
+- In /api/list: generate ID, create draft listing, reply with ID and publish instructions
+- In /api/edit: verify owner (ownerPhone === phone), whitelist allowed fields, update and confirm
+- On publish (webhook), set published:true and notify owner
+
+Step 7 — Rate limits and locks
+- Add simple daily counters on users (searchCountDay, photoRequestCountDay)
+- Enforce per-minute throttles in webhook commands
+- Prepare Redis-backed implementation for production
+
+Step 8 — Validation and sanitization
+- Create src/lib/validate.js with helpers for phone, listing fields, command payloads
+- Apply validation in all routes; sanitize user text
+
+Step 9 — Transactions and logging
+- Ensure addTransaction is called for SEARCH, PHOTOS, BUY, publish
+- Create src/lib/log.js for structured logs; redact secrets; unify error responses
+
+Step 10 — HELP and STOP commands
+- Implement HELP: return concise usage guide and credit info
+- Implement STOP: mark user as opted-out and stop sending messages
+
+Step 11 — Tests
+- Unit tests for store: credits, search, photo requests
+- Integration tests for routes: search/photos/buy webhook
+- E2E with Twilio sandbox and simulated Paynow
+
+Step 12 — Deployment readiness
+- Environment configs for production (Mongo, Twilio, Paynow)
+- Migrations and seeds; backups and retention policies
+- Observability (metrics, dashboards) and error tracking

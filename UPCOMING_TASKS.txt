@@ -1,0 +1,54 @@
+Stage 0 — Environment & project hygiene
+- Fix ESLint TypeScript peer or adjust JS-only lint config
+- Decide ESM vs CJS; set "type": "module" or convert scripts
+- Confirm env vars and secrets handling; prepare production configs
+- Seed baseline data and ensure indexes
+
+Stage 1 — WhatsApp MVP
+- Implement Twilio outbound send helper
+- Verify Twilio webhook signatures
+- Add HELP and STOP commands with concise guidance
+- SEARCH: format compact reply; deduct 1 credit after successful send
+
+Stage 2 — Photos Flow
+- PHOTOS: create pending request on command
+- YES: send images/links and charge 2 credits post-send
+- Integrate image hosting/CDN for media
+- Guardrails for no-pending requests and error messaging
+
+Stage 3 — Listing Lifecycle
+- LIST: create draft listing with generated ID
+- EDIT: verify ownership; whitelist editable fields; update safely
+- Publish: BUY LIST triggers Paynow push; webhook marks listing published and notifies
+
+Stage 4 — Payments & Credits
+- Implement real Paynow integration + signature verification
+- BUY credits bundles; update balances; record transactions
+- Idempotency for webhook and delivery callbacks
+- Send receipts using WhatsApp templates
+
+Stage 5 — Rate Limiting & Anti‑Abuse
+- Daily caps for SEARCH and PHOTOS per user
+- Per-minute throttle to deter scraping
+- Locks around credit deductions and message sends; Redis in production
+
+Stage 6 — Validation, Security & Logging
+- Input validation for all routes; sanitize text
+- Structured logging with redaction; consistent error handling
+- Monitoring dashboards and alerting thresholds
+
+Stage 7 — Testing
+- Unit tests: store functions, credit updates
+- Integration tests: API routes, webhook flows
+- E2E: Twilio sandbox and simulated Paynow
+
+Stage 8 — UX Polish
+- Search ranking and formatting; cap to 10 results
+- Bundles/pricing visibility; display balances in replies
+- Basic admin moderation workflow for REPORT tickets
+
+Stage 9 — Deployment & Ops
+- Production configuration for Mongo/Twilio/Paynow
+- Migrations for schema evolution; improve seeds/sample data
+- Observability and error tracking (Sentry)
+- Backups and data retention policies
