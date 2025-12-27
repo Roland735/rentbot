@@ -17,7 +17,7 @@ export async function POST(req) {
   const data = await req.formData();
   const obj = Object.fromEntries([...data.entries()]);
   const signature = req.headers.get("x-twilio-signature");
-  const url = `${process.env.NEXT_PUBLIC_BASE_URL}/api/twilio/webhook`;
+  const url = `https://rentbot-self.vercel.app/api/twilio/webhook`;
   if (!validateTwilioSignature(url, obj, signature)) {
     return new Response("", { status: 401 });
   }
