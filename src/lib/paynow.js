@@ -1,8 +1,12 @@
 import { Paynow } from "paynow";
 import { logInfo, logError } from "./log";
 
-const PAYNOW_INTEGRATION_ID = process.env.PAYNOW_INTEGRATION_ID || process.env.PAYNOW_API_KEY;
-const PAYNOW_INTEGRATION_KEY = process.env.PAYNOW_INTEGRATION_KEY || process.env.PAYNOW_API_SECRET;
+const PAYNOW_INTEGRATION_ID = (process.env.PAYNOW_INTEGRATION_ID || process.env.PAYNOW_API_KEY || "").trim();
+const PAYNOW_INTEGRATION_KEY = (process.env.PAYNOW_INTEGRATION_KEY || process.env.PAYNOW_API_SECRET || "").trim();
+const PAYNOW_EMAIL = (process.env.PAYNOW_EMAIL || "customer@rentbot.co.zw").trim();
+
+// Debug log to verify credentials
+console.log('[Paynow] Initializing with ID:', PAYNOW_INTEGRATION_ID);
 
 if (!PAYNOW_INTEGRATION_ID || !PAYNOW_INTEGRATION_KEY) {
   throw new Error("Paynow credentials missing. Please check .env.local and restart server.");
@@ -14,9 +18,12 @@ const paynow = new Paynow(PAYNOW_INTEGRATION_ID, PAYNOW_INTEGRATION_KEY);
 paynow.resultUrl = `${process.env.NEXT_PUBLIC_BASE_URL}/api/paynow/webhook`;
 paynow.returnUrl = `${process.env.NEXT_PUBLIC_BASE_URL}/payment-success`;
 
-export async function createPush({ phone, amount, reference, email = "customer@rentbot.co.zw" }) {
+export async function createPush({ phone, amount, reference, email }) {
+  // Use provided email or fallback to environment email (essential for Test Mode)
+  const authEmail = email || PAYNOW_EMAIL;
+
   try {
-    const payment = paynow.createPayment(reference, email);
+    const payment = paynow.createPayment(reference, authEmail);
     payment.add("RentBot Service", amount);
 
     // Sanitize phone for Ecocash/OneMoney
