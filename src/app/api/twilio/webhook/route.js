@@ -1,4 +1,4 @@
-import { ensureUser, searchListings, createPhotoRequest, getPendingPhotoRequest, updateCredits, confirmPhotoRequest, createListingDraft, createModerationTicket, getUser, setOptOut, getListingById, setUserDraftState, clearUserDraftState, updateListingDraft } from "@/lib/store";
+import { ensureUser, searchListings, createPhotoRequest, getPendingPhotoRequest, updateCredits, confirmPhotoRequest, createListingDraft, createModerationTicket, getUser, setOptOut, getListingById, setUserDraftState, clearUserDraftState, updateListingDraft, getListingCountsBySuburb } from "@/lib/store";
 import { sendWhatsApp, sendWhatsAppFlow, validateTwilioSignature } from "@/lib/twilio";
 import { formatSearchResults, formatPhotosRequest, formatInsufficientCredits, formatHelp, formatListingDraft } from "@/lib/format";
 import { canSearch, recordSearch, canPhotos, recordPhotos } from "@/lib/rate";
@@ -56,8 +56,14 @@ export async function POST(req) {
     // We can reuse draftStatus field for search flow state too, or add a new one. 
     // draftStatus is a string, currentDraftId is a string. We can use "search" as ID.
 
-    const suburbList = suburbs.map((s, i) => `${i + 1}. ${s}`).join("\n");
-    await sendWhatsApp(phone, `*Search Listings*\nReply with the *Number* of the suburb you want to search in:\n\n${suburbList}\n\nOr reply *ALL* to search everywhere.`);
+    const counts = await getListingCountsBySuburb();
+    const suburbList = suburbs.map((s, i) => {
+      const data = counts[s] || { count: 0, hasPhotos: false };
+      const photoIcon = data.hasPhotos ? " 📷" : "";
+      return `${i + 1}. ${s} (${data.count})${photoIcon}`;
+    }).join("\n");
+
+    await sendWhatsApp(phone, `*Search Listings*\nReply with the *Number* of the suburb you want to search in:\n(Count) shows available listings.\n📷 means photos are available.\n\n${suburbList}\n\nOr reply *ALL* to search everywhere.`);
     return Response.json({ ok: true });
   }
   if (command === "PHOTOS") {

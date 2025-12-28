@@ -86,6 +86,26 @@ export async function confirmPhotoRequest(phone) {
   await col.updateOne({ phone, status: "pending_confirmation" }, { $set: { status: "completed", confirmedAt: new Date() } });
 }
 
+export async function getListingCountsBySuburb() {
+  const db = await getDb();
+  const col = db.collection("listings");
+
+  // Aggregate counts by suburb
+  const pipeline = [
+    { $match: { suburb: { $exists: true, $ne: "" } } },
+    { $group: { _id: "$suburb", count: { $sum: 1 }, hasPhotos: { $max: { $cond: [{ $gt: [{ $size: { $ifNull: ["$external_images", []] } }, 0] }, true, false] } } } },
+    { $sort: { _id: 1 } }
+  ];
+
+  const results = await col.aggregate(pipeline).toArray();
+  // Transform to map for easy lookup
+  const counts = {};
+  results.forEach(r => {
+    counts[r._id] = { count: r.count, hasPhotos: r.hasPhotos };
+  });
+  return counts;
+}
+
 export async function setUserDraftState(phone, status, draftId) {
   const db = await getDb();
   const col = db.collection("users");
