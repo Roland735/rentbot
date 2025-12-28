@@ -1,8 +1,12 @@
 import { Paynow } from "paynow";
 import { logInfo, logError } from "./log";
 
-const PAYNOW_INTEGRATION_ID = process.env.PAYNOW_INTEGRATION_ID;
-const PAYNOW_INTEGRATION_KEY = process.env.PAYNOW_INTEGRATION_KEY;
+const PAYNOW_INTEGRATION_ID = process.env.PAYNOW_INTEGRATION_ID || process.env.PAYNOW_API_KEY;
+const PAYNOW_INTEGRATION_KEY = process.env.PAYNOW_INTEGRATION_KEY || process.env.PAYNOW_API_SECRET;
+
+if (!PAYNOW_INTEGRATION_ID || !PAYNOW_INTEGRATION_KEY) {
+  throw new Error("Paynow credentials missing. Please check .env.local and restart server.");
+}
 
 // Ensure these are set in production
 const paynow = new Paynow(PAYNOW_INTEGRATION_ID, PAYNOW_INTEGRATION_KEY);

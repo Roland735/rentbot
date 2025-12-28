@@ -184,10 +184,14 @@ async function ensureIndexes(collection, defs) {
       await collection.createIndexes(idxs);
     } catch (err) {
       // If an index already exists with a different specification, createIndexes throws.
-      // Log and continue — this mirrors previous tolerant behavior.
-      // You may want to rethrow in CI environments.
-      // eslint-disable-next-line no-console
-      console.warn(`ensureIndexes: createIndexes failed for collection ${collection.collectionName}:`, err.message || err);
+      // If it's just a name conflict, it's usually benign in dev.
+      if (err.message && err.message.includes("Index already exists")) {
+        // eslint-disable-next-line no-console
+        console.log(`[info] ensureIndexes: Index already exists for ${collection.collectionName} (ignoring name conflict)`);
+      } else {
+        // eslint-disable-next-line no-console
+        console.warn(`ensureIndexes: createIndexes failed for collection ${collection.collectionName}:`, err.message || err);
+      }
     }
   }
 }
