@@ -1,11 +1,27 @@
 export function formatSearchResults(results, balanceAfter) {
   const lines = [];
   lines.push(`${results.length} matches (1 credit used — balance ${balanceAfter}):`);
+
   results.forEach((r, i) => {
     const rent = typeof r.rent === "number" ? r.rent : 0;
-    lines.push(`${i + 1}. ${r.suburb || ""} — ${r.title || ""} — $${rent} — Contact: ${r.contactPhone || r.ownerPhone || ""} — ID: ${r.id || ""}`);
+    const type = r.type || "Not specified";
+    const desc = r.text || r.description || "No description";
+    const amenities = (Array.isArray(r.amenities) && r.amenities.length > 0)
+      ? `\nAmenities: ${r.amenities.join(", ")}`
+      : "";
+
+    lines.push(
+      `\n${i + 1}. Listing Details\n` +
+      `Title: ${r.title || "Untitled"}\n` +
+      `Suburb: ${r.suburb || "No location"}\n` +
+      `Rent: $${rent} (Weekly)\n` +
+      `Type: ${type}\n` +
+      `Description: ${desc}${amenities}\n` +
+      `Contact: ${r.contactPhone || r.ownerPhone || ""} (ID: ${r.id})`
+    );
   });
-  lines.push(`Reply PHOTOS <ID> to request images (2 credits). Reply HELP for commands.`);
+
+  lines.push(`\nReply PHOTOS <ID> to request images (2 credits). Reply HELP for commands.`);
   return lines.join("\n");
 }
 
@@ -26,7 +42,7 @@ export function formatInsufficientCredits(required) {
 }
 
 export function formatListingDraft(id) {
-  return `✅ Listing draft saved — ID: ${id}. To publish, reply BUY LIST ${id}. Publishing requires $3 via Paynow Express.`;
+  return `✅ *Listing Draft Saved*\n\nYour listing is ready for review (ID: ${id}).\n\nReply *BUY LIST ${id}* to publish it.\n(Publishing requires $3 via Paynow Express)`;
 }
 
 export function formatEditConfirmed(id, field) {

@@ -206,13 +206,24 @@ export async function POST(req) {
     }
 
     if (user.draftStatus === "asking_description") {
-      // This is the last step for now (simplifying amenities as part of description or skipping strict list)
-      await updateListingDraft(draftId, { text: text, description: text }); // use text as description
+      // Split description and try to extract amenities if provided in comma separated list within description
+      // For now, we just treat it as one text block, but we could parse it more intelligently.
+      // But the user asked for detail. Let's ask for amenities separately to ensure high detail.
 
-      // Clear state
+      await updateListingDraft(draftId, { text: text, description: text });
+      await setUserDraftState(phone, "asking_amenities", draftId);
+      await sendWhatsApp(phone, "Step 6/6: Amenities\nList the *Amenities* separated by commas (e.g. WiFi, Pool, Solar, Borehole). If none, reply *NONE*.");
+      return Response.json({ ok: true });
+    }
+
+    if (user.draftStatus === "asking_amenities") {
+      let amenities = [];
+      if (text.toUpperCase() !== "NONE") {
+        amenities = text.split(",").map(s => s.trim()).filter(s => s.length > 0);
+      }
+
+      await updateListingDraft(draftId, { amenities });
       await clearUserDraftState(phone);
-
-      // Send confirmation
       await sendWhatsApp(phone, formatListingDraft(draftId));
       return Response.json({ ok: true });
     }
