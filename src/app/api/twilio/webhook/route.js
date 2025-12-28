@@ -1,4 +1,4 @@
-import { ensureUser, searchListings, createPhotoRequest, getPendingPhotoRequest, updateCredits, confirmPhotoRequest, createListingDraft, createModerationTicket, getUser, setOptOut, getListingById } from "@/lib/store";
+import { ensureUser, searchListings, createPhotoRequest, getPendingPhotoRequest, updateCredits, confirmPhotoRequest, createListingDraft, createModerationTicket, getUser, setOptOut, getListingById, setUserDraftState, clearUserDraftState, updateListingDraft } from "@/lib/store";
 import { sendWhatsApp, sendWhatsAppFlow, validateTwilioSignature } from "@/lib/twilio";
 import { formatSearchResults, formatPhotosRequest, formatInsufficientCredits, formatHelp, formatListingDraft } from "@/lib/format";
 import { canSearch, recordSearch, canPhotos, recordPhotos } from "@/lib/rate";
@@ -86,15 +86,138 @@ export async function POST(req) {
     return Response.json({ ok: true });
   }
   if (command === "LIST") {
+    // If we have a Flow SID, try to use it.
     const flowSid = process.env.TWILIO_FLOW_SID;
     if (flowSid) {
       await sendWhatsAppFlow(phone, flowSid, "Create Listing", "Click the button below to fill out the listing details.");
-    } else {
-      const listing = await createListingDraft(phone, rest);
-      await sendWhatsApp(phone, formatListingDraft(listing.id));
+      return Response.json({ ok: true });
     }
+
+    // Try to parse "One-Shot" input if the user provided arguments
+    // Format: LIST Title, Suburb, Rent, Type, Description
+    if (rest.length > 5 && (rest.includes(",") || rest.includes("\n"))) {
+      const parts = rest.split(/[,;\n]+/).map(s => s.trim()).filter(s => s.length > 0);
+      if (parts.length >= 4) {
+        // Assume order: Title, Suburb, Rent, Type, Description (optional)
+        const [title, suburb, rentStr, type, ...descParts] = parts;
+        const rent = parseFloat(rentStr.replace(/[^0-9.]/g, ""));
+        const description = descParts.join(" ");
+
+        if (!isNaN(rent)) {
+          const listing = await createListingDraft(phone, {
+            title, suburb, rent, type, description: description || title
+          });
+          await sendWhatsApp(phone, formatListingDraft(listing.id));
+          return Response.json({ ok: true });
+        }
+      }
+    }
+
+    // Start conversational flow
+    // 1. Create a blank draft
+    const listing = await createListingDraft(phone, {});
+    // 2. Set user state to asking for input
+    await setUserDraftState(phone, "asking_details_or_step", listing.id);
+    // 3. Ask question
+    await sendWhatsApp(phone, "To list quickly, reply with details in this format:\n*Title, Suburb, Rent, Type, Description*\n\nExample:\n*2BR Flat, Avondale, 300, Apartment, Nice view*\n\nOr reply *STEP* to answer one by one.");
+    logInfo("twilio_list_start", { phone, draftId: listing.id });
     return Response.json({ ok: true });
   }
+
+  if (command === "STOP") {
+    await setOptOut(phone, true);
+    // Also clear any draft state
+    await clearUserDraftState(phone);
+    await sendWhatsApp(phone, "You have been opted out.");
+    return Response.json({ ok: true });
+  }
+
+  // Handle Conversational States
+  if (user?.draftStatus && user?.currentDraftId) {
+    const draftId = user.currentDraftId;
+    const text = (obj.Body || "").trim();
+
+    // Allow user to cancel
+    if (text.toUpperCase() === "CANCEL") {
+      await clearUserDraftState(phone);
+      await sendWhatsApp(phone, "Listing creation canceled.");
+      return Response.json({ ok: true });
+    }
+
+    if (user.draftStatus === "asking_details_or_step") {
+      if (text.toUpperCase() === "STEP") {
+        await setUserDraftState(phone, "asking_title", draftId);
+        await sendWhatsApp(phone, "Step 1/5: Title\nWhat is the *Title* of your listing?\n(e.g. Modern 2 Bedroom Apartment)");
+        return Response.json({ ok: true });
+      } else {
+        // Try to parse as One-Shot
+        const parts = text.split(/[,;\n]+/).map(s => s.trim()).filter(s => s.length > 0);
+        if (parts.length >= 4) {
+          const [title, suburb, rentStr, type, ...descParts] = parts;
+          const rent = parseFloat(rentStr.replace(/[^0-9.]/g, ""));
+          const description = descParts.join(" ");
+
+          if (!isNaN(rent)) {
+            await updateListingDraft(draftId, {
+              title, suburb, rent, type, description: description || title, text: description || title
+            });
+            await clearUserDraftState(phone);
+            await sendWhatsApp(phone, formatListingDraft(draftId));
+            return Response.json({ ok: true });
+          }
+        }
+        // If parsing failed
+        await sendWhatsApp(phone, "I couldn't understand that format. Please reply *STEP* to do it one by one, or try sending the format again: *Title, Suburb, Rent, Type, Description*");
+        return Response.json({ ok: true });
+      }
+    }
+
+    if (user.draftStatus === "asking_title") {
+      await updateListingDraft(draftId, { title: text });
+      await setUserDraftState(phone, "asking_suburb", draftId);
+      await sendWhatsApp(phone, "Step 2/5: Location\nWhich *Suburb* is the property located in?\n(e.g. Avondale, CBD, Borrowdale)");
+      return Response.json({ ok: true });
+    }
+
+    if (user.draftStatus === "asking_suburb") {
+      await updateListingDraft(draftId, { suburb: text });
+      await setUserDraftState(phone, "asking_rent", draftId);
+      await sendWhatsApp(phone, "Step 3/5: Price\nWhat is the *Weekly Rent* in USD?\n(Please enter a number only, e.g. 300)");
+      return Response.json({ ok: true });
+    }
+
+    if (user.draftStatus === "asking_rent") {
+      const rent = parseFloat(text.replace(/[^0-9.]/g, ""));
+      if (isNaN(rent)) {
+        await sendWhatsApp(phone, "Please enter a valid number for rent.");
+        return Response.json({ ok: true });
+      }
+      await updateListingDraft(draftId, { rent });
+      await setUserDraftState(phone, "asking_type", draftId);
+      await sendWhatsApp(phone, "Step 4/5: Type\nWhat *Type* of property is it?\n(e.g. Apartment, House, Shop, Office)");
+      return Response.json({ ok: true });
+    }
+
+    if (user.draftStatus === "asking_type") {
+      await updateListingDraft(draftId, { type: text });
+      await setUserDraftState(phone, "asking_description", draftId);
+      await sendWhatsApp(phone, "Step 5/5: Description\nFinally, provide a *Description* (Amenities, key features, etc.):");
+      return Response.json({ ok: true });
+    }
+
+    if (user.draftStatus === "asking_description") {
+      // This is the last step for now (simplifying amenities as part of description or skipping strict list)
+      await updateListingDraft(draftId, { text: text, description: text }); // use text as description
+
+      // Clear state
+      await clearUserDraftState(phone);
+
+      // Send confirmation
+      await sendWhatsApp(phone, formatListingDraft(draftId));
+      return Response.json({ ok: true });
+    }
+  }
+
   if (command === "FLOW_RESPONSE") {
     const listing = await createListingDraft(phone, rest);
     await sendWhatsApp(phone, formatListingDraft(listing.id));
@@ -102,11 +225,6 @@ export async function POST(req) {
   }
   if (command === "HELP") {
     await sendWhatsApp(phone, formatHelp(user?.credits ?? 0));
-    return Response.json({ ok: true });
-  }
-  if (command === "STOP") {
-    await setOptOut(phone, true);
-    await sendWhatsApp(phone, "You have been opted out.");
     return Response.json({ ok: true });
   }
   return Response.json({ ok: true });

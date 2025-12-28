@@ -11,7 +11,7 @@ export async function ensureUser(phone) {
   if (existing) return existing;
   const user = {
     phone,
-    credits: 3,
+    credits: 100, // Increased default credits for testing
     verified: false,
     role: "user",
     searchCountDay: 0,
@@ -84,6 +84,25 @@ export async function confirmPhotoRequest(phone) {
   const db = await getDb();
   const col = db.collection("photoRequests");
   await col.updateOne({ phone, status: "pending_confirmation" }, { $set: { status: "completed", confirmedAt: new Date() } });
+}
+
+export async function setUserDraftState(phone, status, draftId) {
+  const db = await getDb();
+  const col = db.collection("users");
+  await col.updateOne({ phone }, { $set: { draftStatus: status, currentDraftId: draftId, updatedAt: new Date() } });
+}
+
+export async function clearUserDraftState(phone) {
+  const db = await getDb();
+  const col = db.collection("users");
+  await col.updateOne({ phone }, { $unset: { draftStatus: "", currentDraftId: "" }, $set: { updatedAt: new Date() } });
+}
+
+export async function updateListingDraft(id, data) {
+  const db = await getDb();
+  const col = db.collection("listings");
+  await col.updateOne({ id }, { $set: { ...data, updatedAt: new Date() } });
+  return col.findOne({ id });
 }
 
 export async function createListingDraft(phone, details) {

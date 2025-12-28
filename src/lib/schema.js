@@ -12,6 +12,8 @@ export const usersSchema = {
     role: { bsonType: "string" },
     searchCountDay: { bsonType: ["int", "double"], minimum: 0 },
     photoRequestCountDay: { bsonType: ["int", "double"], minimum: 0 },
+    draftStatus: { bsonType: "string" },
+    currentDraftId: { bsonType: "string" },
     createdAt: { bsonType: "date" },
     updatedAt: { bsonType: "date" }
   },
