@@ -25,12 +25,32 @@ export function formatSearchResults(results, balanceAfter) {
     );
   });
 
-  lines.push(`\nReply PHOTOS <ID> to request images (2 credits). Reply HELP for commands.`);
+  lines.push(`\nReply with the *Listing Number* (e.g. 1) to get photos (2 credits). Reply HELP for commands.`);
   return lines.join("\n");
 }
 
+export function formatWelcome(credits) {
+  return `👋 *Welcome to RentBot!*
+
+I can help you find a place to rent or list your own property.
+
+*How to use:*
+🏠 *SEARCH* - Find a home (1 credit)
+📝 *LIST* - List a property (Free to draft, $0.50 to publish)
+📸 *PHOTOS* - View listing photos (2 credits)
+💳 *BUY CREDITS* - Top up your account
+❓ *HELP* - Show this menu
+
+*Buying Credits:*
+Reply *BUY CREDITS <amount>* to purchase.
+Example: *BUY CREDITS 5* gets you $5 worth of credits.
+Payment via EcoCash/OneMoney.
+
+*Current Balance:* ${credits} credits`;
+}
+
 export function formatHelp(credits) {
-  return `RentBot — Commands:\nSEARCH <criteria> (1 credit)\nPHOTOS <ID> (2 credits, confirm YES)\nLIST <text>\nEDIT <id> <field> <value>\nBUY <bundle>\nHELP\nSTOP\nCredits: ${credits}`;
+  return formatWelcome(credits);
 }
 
 export function formatStop() {
@@ -46,7 +66,7 @@ export function formatInsufficientCredits(required) {
 }
 
 export function formatListingDraft(id) {
-  return `✅ *Listing Draft Saved*\n\nYour listing is ready for review (ID: ${id}).\n\nReply *BUY LIST ${id}* to publish it.\n(Publishing requires $3 via Paynow Express)`;
+  return `✅ *Listing Draft Saved*\n\nYour listing is ready for review (ID: ${id}).\n\nReply *BUY LIST ${id}* to publish it.\n(Publishing requires $0.50 via Paynow Express)`;
 }
 
 export function formatEditConfirmed(id, field) {

@@ -1,8 +1,9 @@
 function redact(obj) {
   const o = JSON.parse(JSON.stringify(obj || {}));
   if (o.TWILIO_AUTH_TOKEN) o.TWILIO_AUTH_TOKEN = "[redacted]";
-  if (o.PAYNOW_API_KEY) o.PAYNOW_API_KEY = "[redacted]";
-  if (o.PAYNOW_API_SECRET) o.PAYNOW_API_SECRET = "[redacted]";
+  if (o.PAYNOW_INTEGRATION_KEY) o.PAYNOW_INTEGRATION_KEY = "[redacted]";
+  if (o.PAYNOW_API_KEY) o.PAYNOW_API_KEY = "[redacted]"; // Legacy check
+  if (o.PAYNOW_API_SECRET) o.PAYNOW_API_SECRET = "[redacted]"; // Legacy check
   return o;
 }
 

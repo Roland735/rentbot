@@ -1,10 +1,11 @@
-import { ensureUser, searchListings, createPhotoRequest, getPendingPhotoRequest, updateCredits, confirmPhotoRequest, createListingDraft, createModerationTicket, getUser, setOptOut, getListingById, setUserDraftState, clearUserDraftState, updateListingDraft, getListingCountsBySuburb } from "@/lib/store";
+import { ensureUser, searchListings, createPhotoRequest, getPendingPhotoRequest, updateCredits, confirmPhotoRequest, createListingDraft, createModerationTicket, getUser, setOptOut, getListingById, setUserDraftState, clearUserDraftState, updateListingDraft, getListingCountsBySuburb, saveSearchResults, addTransaction } from "@/lib/store";
 import { sendWhatsApp, sendWhatsAppFlow, validateTwilioSignature } from "@/lib/twilio";
-import { formatSearchResults, formatPhotosRequest, formatInsufficientCredits, formatHelp, formatListingDraft } from "@/lib/format";
+import { formatSearchResults, formatPhotosRequest, formatInsufficientCredits, formatHelp, formatListingDraft, formatWelcome } from "@/lib/format";
 import { canSearch, recordSearch, canPhotos, recordPhotos } from "@/lib/rate";
 import { sanitizeText } from "@/lib/validate";
 import { logInfo } from "@/lib/log";
 import { suburbs } from "@/lib/suburbs";
+import { createPush } from "@/lib/paynow";
 
 function parse(body) {
   const phone = (body.From || "").replace("whatsapp:", "");
@@ -44,17 +45,8 @@ export async function POST(req) {
       return Response.json({ ok: true });
     }
 
-    // Check if user is already in a search flow
-    if (user.searchStatus) {
-      // Handle search steps
-      // But wait, the user said "Search is not showing the suburb".
-      // This implies when they type SEARCH, we should ask them for the suburb number first.
-    }
-
     // Start search flow
     await setUserDraftState(phone, "search_asking_suburb", "search");
-    // We can reuse draftStatus field for search flow state too, or add a new one. 
-    // draftStatus is a string, currentDraftId is a string. We can use "search" as ID.
 
     const counts = await getListingCountsBySuburb();
     const suburbList = suburbs.map((s, i) => {
@@ -66,8 +58,27 @@ export async function POST(req) {
     await sendWhatsApp(phone, `*Search Listings*\nReply with the *Number* of the suburb you want to search in:\n(Count) shows available listings.\n📷 means photos are available.\n\n${suburbList}\n\nOr reply *ALL* to search everywhere.`);
     return Response.json({ ok: true });
   }
-  if (command === "PHOTOS") {
-    const id = rest.split(/\s+/)[0];
+
+  // Handle Photos (ID or Index)
+  let photoIdRequest = null;
+  if (command === "PHOTOS" || command === "P") {
+    const param = rest.split(/\s+/)[0];
+    const idx = parseInt(param);
+    if (!isNaN(idx) && user.lastSearchResults && user.lastSearchResults[idx - 1]) {
+      photoIdRequest = user.lastSearchResults[idx - 1];
+    } else {
+      photoIdRequest = param;
+    }
+  } else if (!isNaN(parseInt(command)) && user.lastSearchResults) {
+    // Shortcut: Just typing the number
+    const idx = parseInt(command);
+    if (user.lastSearchResults[idx - 1]) {
+      photoIdRequest = user.lastSearchResults[idx - 1];
+    }
+  }
+
+  if (photoIdRequest) {
+    const id = photoIdRequest;
     const rate = await canPhotos(phone);
     if (!rate.ok) return Response.json({ ok: true });
     await createPhotoRequest(phone, id);
@@ -136,6 +147,94 @@ export async function POST(req) {
     return Response.json({ ok: true });
   }
 
+  if (command === "BUY") {
+    // BUY LIST <ID>
+    if (rest.startsWith("LIST")) {
+      const parts = rest.split(/\s+/);
+      const listingId = parts[1];
+      if (!listingId) {
+        await sendWhatsApp(phone, "Please specify the Listing ID. e.g. BUY LIST RNT-12345");
+        return Response.json({ ok: true });
+      }
+
+      const listing = await getListingById(listingId);
+      if (!listing) {
+        await sendWhatsApp(phone, "Listing not found.");
+        return Response.json({ ok: true });
+      }
+      if (listing.ownerPhone !== phone) {
+        await sendWhatsApp(phone, "You can only publish your own listings.");
+        return Response.json({ ok: true });
+      }
+      if (listing.published) {
+        await sendWhatsApp(phone, "This listing is already published.");
+        return Response.json({ ok: true });
+      }
+
+      // Initiate Paynow
+      const amount = 0.50;
+      const reference = `PUB-${listingId}-${Date.now()}`;
+      const res = await createPush({ phone, amount, reference, email: "customer@rentbot.co.zw" });
+
+      if (res.ok) {
+        await addTransaction({
+          reference,
+          phone,
+          product: "listing_publish",
+          amount,
+          providerRef: res.providerRef,
+          status: "pending",
+          listingId,
+          createdAt: new Date()
+        });
+        await sendWhatsApp(phone, `Payment initiated ($${amount}).\n\nPlease check your phone now and enter your PIN to confirm.\n\nOnce paid, your listing will be live automatically.`);
+      } else {
+        const errorMsg = res.error?.includes("Invalid mobile number")
+          ? "Payment failed: Please use a valid Zimbabwe Ecocash/OneMoney number."
+          : "Payment initiation failed. Please try again later.";
+        await sendWhatsApp(phone, errorMsg);
+        logInfo("paynow_init_fail", { phone, error: res.error });
+      }
+      return Response.json({ ok: true });
+    }
+
+    // BUY CREDITS <AMOUNT>
+    if (rest.startsWith("CREDITS")) {
+      const parts = rest.split(/\s+/);
+      const amount = parseFloat(parts[1]);
+      if (isNaN(amount) || amount < 1) {
+        await sendWhatsApp(phone, "Please specify a valid amount. e.g. BUY CREDITS 5");
+        return Response.json({ ok: true });
+      }
+
+      const reference = `CRD-${Date.now()}`;
+      const res = await createPush({ phone, amount, reference, email: "customer@rentbot.co.zw" });
+
+      if (res.ok) {
+        await addTransaction({
+          reference,
+          phone,
+          product: `credits_${amount}`, // convention: credits_AMOUNT
+          amount,
+          providerRef: res.providerRef,
+          status: "pending",
+          createdAt: new Date()
+        });
+        await sendWhatsApp(phone, `Payment initiated ($${amount}).\n\nPlease check your phone now and enter your PIN to confirm.\n\nOnce paid, your credits will be added.`);
+      } else {
+        const errorMsg = res.error?.includes("Invalid mobile number")
+          ? "Payment failed: Please use a valid Zimbabwe Ecocash/OneMoney number."
+          : "Payment initiation failed. Please try again later.";
+        await sendWhatsApp(phone, errorMsg);
+        logInfo("paynow_init_fail", { phone, error: res.error });
+      }
+      return Response.json({ ok: true });
+    }
+
+    await sendWhatsApp(phone, "To publish a listing, reply: BUY LIST <ID>\nTo buy credits, reply: BUY CREDITS <AMOUNT>");
+    return Response.json({ ok: true });
+  }
+
   if (command === "STOP") {
     await setOptOut(phone, true);
     // Also clear any draft state
@@ -154,6 +253,53 @@ export async function POST(req) {
       await clearUserDraftState(phone);
       await sendWhatsApp(phone, "Action canceled.");
       return Response.json({ ok: true });
+    }
+
+    // Allow user to go BACK
+    if (text.toUpperCase() === "BACK") {
+      const prev = {
+        "asking_type": "asking_title",
+        "asking_suburb": "asking_type",
+        "asking_address": "asking_suburb",
+        "asking_rent": "asking_address",
+        "asking_deposit": "asking_rent",
+        "asking_bedrooms": "asking_deposit",
+        "asking_amenities": "asking_bedrooms",
+        "asking_contact_name": "asking_amenities",
+        "asking_contact_phone": "asking_contact_name",
+        "search_asking_rent": "search_asking_suburb"
+      }[user.draftStatus];
+
+      if (prev) {
+        if (prev === "search_asking_suburb") {
+          await setUserDraftState(phone, prev, "search");
+          const counts = await getListingCountsBySuburb();
+          const suburbList = suburbs.map((s, i) => {
+            const data = counts[s] || { count: 0, hasPhotos: false };
+            const photoIcon = data.hasPhotos ? " 📷" : "";
+            return `${i + 1}. ${s} (${data.count})${photoIcon}`;
+          }).join("\n");
+          await sendWhatsApp(phone, `*Search Listings*\nReply with the *Number* of the suburb you want to search in:\n(Count) shows available listings.\n📷 means photos are available.\n\n${suburbList}\n\nOr reply *ALL* to search everywhere.`);
+        } else {
+          await setUserDraftState(phone, prev, draftId);
+          let prompt = "";
+          if (prev === "asking_title") prompt = "Step 1/10: Title\nWhat is the *Title* of your listing?\n(e.g. Modern 2 Bedroom Apartment)";
+          else if (prev === "asking_type") prompt = "Step 2/10: Type\nWhat *Type* of property is it?\n(e.g. Apartment, House, Shop, Office)";
+          else if (prev === "asking_suburb") {
+            const suburbList = suburbs.map((s, i) => `${i + 1}. ${s}`).join("\n");
+            prompt = `Step 3/10: Suburb\nReply with the *Number* of the suburb:\n\n${suburbList}`;
+          }
+          else if (prev === "asking_address") prompt = "Step 4/10: Address\nWhat is the specific *Address*? (e.g. 123 Samora Machel Ave)";
+          else if (prev === "asking_rent") prompt = "Step 5/10: Rent\nWhat is the *Weekly Rent* in USD? (Number only)";
+          else if (prev === "asking_deposit") prompt = "Step 6/10: Deposit\nWhat is the *Deposit* amount in USD? (Number only, reply 0 if none)";
+          else if (prev === "asking_bedrooms") prompt = "Step 7/10: Bedrooms\nHow many *Bedrooms*? (e.g. 1, 2, Studio)";
+          else if (prev === "asking_amenities") prompt = "Step 8/10: Key Features / Amenities\nList them separated by commas (e.g. WiFi, Borehole, Solar).";
+          else if (prev === "asking_contact_name") prompt = "Step 9/10: Contact Name\nWho is the contact person?";
+
+          if (prompt) await sendWhatsApp(phone, prompt);
+        }
+        return Response.json({ ok: true });
+      }
     }
 
     // --- SEARCH FLOW ---
@@ -246,7 +392,7 @@ export async function POST(req) {
     if (user.draftStatus === "asking_title") {
       await updateListingDraft(draftId, { title: text });
       await setUserDraftState(phone, "asking_type", draftId);
-      await sendWhatsApp(phone, "Step 2/10: Type\nWhat *Type* of property is it?\n(e.g. Apartment, House, Shop, Office)");
+      await sendWhatsApp(phone, "Step 2/10: Type\nWhat *Type* of property is it?\n(e.g. Apartment, House, Shop, Office)\n(Reply BACK to go back)");
       return Response.json({ ok: true });
     }
 
@@ -255,7 +401,7 @@ export async function POST(req) {
       await setUserDraftState(phone, "asking_suburb", draftId);
 
       const suburbList = suburbs.map((s, i) => `${i + 1}. ${s}`).join("\n");
-      await sendWhatsApp(phone, `Step 3/10: Suburb\nReply with the *Number* of the suburb:\n\n${suburbList}`);
+      await sendWhatsApp(phone, `Step 3/10: Suburb\nReply with the *Number* of the suburb:\n\n${suburbList}\n\n(Reply BACK to go back)`);
       return Response.json({ ok: true });
     }
 
@@ -284,14 +430,14 @@ export async function POST(req) {
 
       await updateListingDraft(draftId, { suburb: selectedSuburb });
       await setUserDraftState(phone, "asking_address", draftId);
-      await sendWhatsApp(phone, "Step 4/10: Address\nWhat is the specific *Address*? (e.g. 123 Samora Machel Ave)");
+      await sendWhatsApp(phone, "Step 4/10: Address\nWhat is the specific *Address*? (e.g. 123 Samora Machel Ave)\n(Reply BACK to go back)");
       return Response.json({ ok: true });
     }
 
     if (user.draftStatus === "asking_address") {
       await updateListingDraft(draftId, { address: text });
       await setUserDraftState(phone, "asking_rent", draftId);
-      await sendWhatsApp(phone, "Step 5/10: Rent\nWhat is the *Weekly Rent* in USD? (Number only)");
+      await sendWhatsApp(phone, "Step 5/10: Rent\nWhat is the *Weekly Rent* in USD? (Number only)\n(Reply BACK to go back)");
       return Response.json({ ok: true });
     }
 
@@ -303,7 +449,7 @@ export async function POST(req) {
       }
       await updateListingDraft(draftId, { rent });
       await setUserDraftState(phone, "asking_deposit", draftId);
-      await sendWhatsApp(phone, "Step 6/10: Deposit\nWhat is the *Deposit* amount in USD? (Number only, reply 0 if none)");
+      await sendWhatsApp(phone, "Step 6/10: Deposit\nWhat is the *Deposit* amount in USD? (Number only, reply 0 if none)\n(Reply BACK to go back)");
       return Response.json({ ok: true });
     }
 
@@ -315,14 +461,14 @@ export async function POST(req) {
       }
       await updateListingDraft(draftId, { deposit });
       await setUserDraftState(phone, "asking_bedrooms", draftId);
-      await sendWhatsApp(phone, "Step 7/10: Bedrooms\nHow many *Bedrooms*? (e.g. 1, 2, Studio)");
+      await sendWhatsApp(phone, "Step 7/10: Bedrooms\nHow many *Bedrooms*? (e.g. 1, 2, Studio)\n(Reply BACK to go back)");
       return Response.json({ ok: true });
     }
 
     if (user.draftStatus === "asking_bedrooms") {
       await updateListingDraft(draftId, { bedrooms: text });
       await setUserDraftState(phone, "asking_amenities", draftId);
-      await sendWhatsApp(phone, "Step 8/10: Key Features / Amenities\nList them separated by commas (e.g. WiFi, Borehole, Solar).");
+      await sendWhatsApp(phone, "Step 8/10: Key Features / Amenities\nList them separated by commas (e.g. WiFi, Borehole, Solar).\n(Reply BACK to go back)");
       return Response.json({ ok: true });
     }
 
@@ -333,14 +479,14 @@ export async function POST(req) {
       }
       await updateListingDraft(draftId, { amenities, description: text }); // Storing raw text as description/features too
       await setUserDraftState(phone, "asking_contact_name", draftId);
-      await sendWhatsApp(phone, "Step 9/10: Contact Name\nWho is the contact person?");
+      await sendWhatsApp(phone, "Step 9/10: Contact Name\nWho is the contact person?\n(Reply BACK to go back)");
       return Response.json({ ok: true });
     }
 
     if (user.draftStatus === "asking_contact_name") {
       await updateListingDraft(draftId, { contactName: text });
       await setUserDraftState(phone, "asking_contact_phone", draftId);
-      await sendWhatsApp(phone, "Step 10/10: Contact Phone\nEnter the WhatsApp number (e.g. +263...). Reply *SAME* to use your current number.");
+      await sendWhatsApp(phone, "Step 10/10: Contact Phone\nEnter the WhatsApp number (e.g. +263...). Reply *SAME* to use your current number.\n(Reply BACK to go back)");
       return Response.json({ ok: true });
     }
 
@@ -361,8 +507,8 @@ export async function POST(req) {
     await sendWhatsApp(phone, formatListingDraft(listing.id));
     return Response.json({ ok: true });
   }
-  if (command === "HELP") {
-    await sendWhatsApp(phone, formatHelp(user?.credits ?? 0));
+  if (command === "HELP" || command === "HI" || command === "HELLO") {
+    await sendWhatsApp(phone, formatWelcome(user?.credits ?? 0));
     return Response.json({ ok: true });
   }
   return Response.json({ ok: true });

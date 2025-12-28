@@ -106,6 +106,11 @@ export async function getListingCountsBySuburb() {
   return counts;
 }
 
+export async function saveSearchResults(phone, listingIds) {
+  const db = await getDb();
+  await db.collection("users").updateOne({ phone }, { $set: { lastSearchResults: listingIds } });
+}
+
 export async function setUserDraftState(phone, status, draftId) {
   const db = await getDb();
   const col = db.collection("users");
