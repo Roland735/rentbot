@@ -1,0 +1,134 @@
+{
+  "version": "3.0",
+  "screens": [
+    {
+      "id": "DETAILS",
+      "title": "Listing Details",
+      "data": {},
+      "layout": {
+        "type": "SingleColumnLayout",
+        "children": [
+          {
+            "type": "Form",
+            "name": "listing_form",
+            "children": [
+              {
+                "type": "TextInput",
+                "label": "Title",
+                "name": "title",
+                "required": true,
+                "input-type": "text"
+              },
+              {
+                "type": "TextInput",
+                "label": "Suburb",
+                "name": "suburb",
+                "required": true,
+                "input-type": "text"
+              },
+              {
+                "type": "TextInput",
+                "label": "Weekly Rent ($)",
+                "name": "rent",
+                "required": true,
+                "input-type": "number"
+              },
+              {
+                "type": "TextArea",
+                "label": "Description",
+                "name": "description",
+                "required": true
+              },
+              {
+                "type": "Dropdown",
+                "label": "Property Type",
+                "name": "type",
+                "required": true,
+                "data-source": [
+                  {
+                    "id": "apartment",
+                    "title": "Apartment"
+                  },
+                  {
+                    "id": "house",
+                    "title": "House"
+                  },
+                  {
+                    "id": "commercial_shop",
+                    "title": "Commercial Shop"
+                  },
+                  {
+                    "id": "office",
+                    "title": "Office"
+                  },
+                  {
+                    "id": "warehouse",
+                    "title": "Warehouse"
+                  },
+                  {
+                    "id": "land",
+                    "title": "Land"
+                  }
+                ]
+              },
+              {
+                "type": "CheckboxGroup",
+                "label": "Amenities",
+                "name": "amenities",
+                "required": false,
+                "data-source": [
+                  {
+                    "id": "geyser",
+                    "title": "Geyser"
+                  },
+                  {
+                    "id": "parking",
+                    "title": "Parking"
+                  },
+                  {
+                    "id": "water_supply",
+                    "title": "Water Supply"
+                  },
+                  {
+                    "id": "power_backup",
+                    "title": "Power Backup"
+                  },
+                  {
+                    "id": "security",
+                    "title": "Security"
+                  },
+                  {
+                    "id": "wifi",
+                    "title": "WiFi"
+                  },
+                  {
+                    "id": "furnished",
+                    "title": "Furnished"
+                  }
+                ]
+              },
+              {
+                "type": "Footer",
+                "label": "Continue",
+                "on-click-action": {
+                  "name": "complete",
+                  "payload": {
+                    "title": "${form.title}",
+                    "suburb": "${form.suburb}",
+                    "rent": "${form.rent}",
+                    "description": "${form.description}",
+                    "type": "${form.type}",
+                    "amenities": "${form.amenities}"
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "routing_model": {
+    "DETAILS": []
+  }
+}

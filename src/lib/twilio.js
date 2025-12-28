@@ -17,6 +17,21 @@ export async function sendWhatsApp(to, body, media = []) {
     return client.messages.create(params);
 }
 
+export async function sendWhatsAppFlow(to, flowSid, flowCta, body) {
+    const client = getClient();
+    // Using Twilio Content API (Templates) is the standard way for Flows
+    // flowSid should be the Content SID (HX...) associated with the Flow
+    const params = {
+        from,
+        to: `whatsapp:${to}`,
+        contentSid: flowSid,
+        contentVariables: JSON.stringify({
+            1: body // Assuming the template has {{1}} for the body text
+        })
+    };
+    return client.messages.create(params);
+}
+
 export function validateTwilioSignature(url, params, signature) {
     return Twilio.validateRequest(authToken, signature, url, params);
 }

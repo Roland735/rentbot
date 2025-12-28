@@ -56,6 +56,8 @@ const listings = [
     rent: 320,
     contactPhone: "0773456789",
     text: "Borrowdale — 2BR — $320",
+    type: "house",
+    amenities: ["parking", "wifi", "geyser"],
     external_images: [],
     published: true,
     createdAt: now(),
@@ -79,7 +81,7 @@ const transactions = [
 async function upsertMany(collection, docs, uniqueKey) {
   for (const doc of docs) {
     const filter = { [uniqueKey]: doc[uniqueKey] };
-    await collection.updateOne(filter, { $setOnInsert: doc }, { upsert: true });
+    await collection.updateOne(filter, { $set: doc }, { upsert: true });
   }
 }
 

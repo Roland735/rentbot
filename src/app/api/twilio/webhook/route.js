@@ -1,5 +1,5 @@
 import { ensureUser, searchListings, createPhotoRequest, getPendingPhotoRequest, updateCredits, confirmPhotoRequest, createListingDraft, createModerationTicket, getUser, setOptOut, getListingById } from "@/lib/store";
-import { sendWhatsApp, validateTwilioSignature } from "@/lib/twilio";
+import { sendWhatsApp, sendWhatsAppFlow, validateTwilioSignature } from "@/lib/twilio";
 import { formatSearchResults, formatPhotosRequest, formatInsufficientCredits, formatHelp, formatListingDraft } from "@/lib/format";
 import { canSearch, recordSearch, canPhotos, recordPhotos } from "@/lib/rate";
 import { sanitizeText } from "@/lib/validate";
@@ -7,6 +7,18 @@ import { logInfo } from "@/lib/log";
 
 function parse(body) {
   const phone = (body.From || "").replace("whatsapp:", "");
+
+  // Handle WhatsApp Flow response
+  if (body.InteractionType === "nfm_reply") {
+    try {
+      const interactionResponse = JSON.parse(body.InteractionResponse || "{}");
+      // The structure depends on Twilio's payload. Usually parsed JSON is enough if flow is simple.
+      return { phone, command: "FLOW_RESPONSE", rest: interactionResponse };
+    } catch (e) {
+      logInfo("flow_parse_error", { error: e.message });
+    }
+  }
+
   const text = (body.Body || "").trim();
   const command = text.split(/\s+/)[0].toUpperCase();
   const rest = text.slice(command.length).trim();
@@ -74,6 +86,16 @@ export async function POST(req) {
     return Response.json({ ok: true });
   }
   if (command === "LIST") {
+    const flowSid = process.env.TWILIO_FLOW_SID;
+    if (flowSid) {
+      await sendWhatsAppFlow(phone, flowSid, "Create Listing", "Click the button below to fill out the listing details.");
+    } else {
+      const listing = await createListingDraft(phone, rest);
+      await sendWhatsApp(phone, formatListingDraft(listing.id));
+    }
+    return Response.json({ ok: true });
+  }
+  if (command === "FLOW_RESPONSE") {
     const listing = await createListingDraft(phone, rest);
     await sendWhatsApp(phone, formatListingDraft(listing.id));
     return Response.json({ ok: true });

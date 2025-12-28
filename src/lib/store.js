@@ -86,17 +86,39 @@ export async function confirmPhotoRequest(phone) {
   await col.updateOne({ phone, status: "pending_confirmation" }, { $set: { status: "completed", confirmedAt: new Date() } });
 }
 
-export async function createListingDraft(phone, shortText) {
+export async function createListingDraft(phone, details) {
   const db = await getDb();
   const col = db.collection("listings");
+
+  let title, suburb, rent, text, type, amenities;
+
+  if (typeof details === 'string') {
+    title = details;
+    suburb = "";
+    rent = 0;
+    text = details;
+    type = "";
+    amenities = [];
+  } else {
+    title = details.title || "";
+    suburb = details.suburb || "";
+    rent = Number(details.rent) || 0;
+    text = details.description || details.text || "";
+    type = details.type || "";
+    // amenities comes as an array from the Flow payload usually, but sometimes might be missing
+    amenities = Array.isArray(details.amenities) ? details.amenities : (details.amenities ? [details.amenities] : []);
+  }
+
   const doc = {
     id: id("RNT"),
     ownerPhone: phone,
-    title: shortText,
-    suburb: "",
-    rent: 0,
+    title,
+    suburb,
+    rent,
     contactPhone: phone,
-    text: shortText,
+    text,
+    type,
+    amenities,
     external_images: [],
     published: false,
     createdAt: new Date(),

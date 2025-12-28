@@ -34,6 +34,8 @@ export const listingsSchema = {
     rent: { bsonType: ["int", "double"], minimum: 0 },
     contactPhone: { bsonType: "string" },
     text: { bsonType: "string" },
+    type: { bsonType: "string" },
+    amenities: { bsonType: "array", items: { bsonType: "string" } },
     external_images: { bsonType: "array", items: { bsonType: "string" } },
     published: { bsonType: "bool" },
     createdAt: { bsonType: "date" },
