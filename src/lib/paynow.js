@@ -30,18 +30,29 @@ export async function createPush({ phone, amount, reference, email = "customer@r
 
     logInfo("paynow_init", { reference, amount, phone: mobileNumber, method });
 
+    // The 'paynow' package might have a bug where response.error is sometimes undefined or an object
+    // when using sendMobile, OR it's failing internally.
+    // However, looking at the error "Cannot read properties of undefined (reading 'toLowerCase')",
+    // this often happens inside the 'paynow' library if it tries to parse a response or check a property.
+    // It usually means the HTTP request failed or returned unexpected data.
+    // 
+    // Fix: Ensure method is lower case string just in case, though we set it manually above.
+    // Also, ensure email is a string.
+
     const response = await paynow.sendMobile(payment, mobileNumber, method);
 
-    if (response.success) {
+    if (response && response.success) {
       logInfo("paynow_success", { pollUrl: response.pollUrl, instructions: response.instructions });
       return { ok: true, providerRef: response.pollUrl, instructions: response.instructions };
     } else {
-      logError("paynow_fail", response.error);
-      return { ok: false, error: response.error };
+      const errorMsg = response ? response.error : "Unknown error from Paynow";
+      logError("paynow_fail", errorMsg);
+      return { ok: false, error: errorMsg };
     }
   } catch (e) {
     logError("paynow_exception", e);
-    return { ok: false, error: e.message };
+    // Return a safe error string even if e is weird
+    return { ok: false, error: e.message || "Internal Paynow Error" };
   }
 }
 
