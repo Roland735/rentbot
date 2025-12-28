@@ -43,16 +43,21 @@ export async function POST(req) {
       await sendWhatsApp(phone, formatInsufficientCredits(1));
       return Response.json({ ok: true });
     }
-    const rate = await canSearch(phone);
-    if (!rate.ok) return Response.json({ ok: true });
-    const results = await searchListings(sanitizeText(rest));
-    const body = formatSearchResults(results, (user.credits || 0) - 1);
-    const sendRes = await sendWhatsApp(phone, body);
-    if (sendRes?.sid) {
-      await updateCredits(phone, -1);
-      await recordSearch(phone);
+
+    // Check if user is already in a search flow
+    if (user.searchStatus) {
+      // Handle search steps
+      // But wait, the user said "Search is not showing the suburb".
+      // This implies when they type SEARCH, we should ask them for the suburb number first.
     }
-    logInfo("twilio_search", { phone, results: results.length });
+
+    // Start search flow
+    await setUserDraftState(phone, "search_asking_suburb", "search");
+    // We can reuse draftStatus field for search flow state too, or add a new one. 
+    // draftStatus is a string, currentDraftId is a string. We can use "search" as ID.
+
+    const suburbList = suburbs.map((s, i) => `${i + 1}. ${s}`).join("\n");
+    await sendWhatsApp(phone, `*Search Listings*\nReply with the *Number* of the suburb you want to search in:\n\n${suburbList}\n\nOr reply *ALL* to search everywhere.`);
     return Response.json({ ok: true });
   }
   if (command === "PHOTOS") {
@@ -133,7 +138,7 @@ export async function POST(req) {
     return Response.json({ ok: true });
   }
 
-  // Handle Conversational States
+  // Handle Conversational States (Listing OR Search)
   if (user?.draftStatus && user?.currentDraftId) {
     const draftId = user.currentDraftId;
     const text = (obj.Body || "").trim();
@@ -141,10 +146,91 @@ export async function POST(req) {
     // Allow user to cancel
     if (text.toUpperCase() === "CANCEL") {
       await clearUserDraftState(phone);
-      await sendWhatsApp(phone, "Listing creation canceled.");
+      await sendWhatsApp(phone, "Action canceled.");
       return Response.json({ ok: true });
     }
 
+    // --- SEARCH FLOW ---
+    if (draftId.startsWith("search")) {
+      if (user.draftStatus === "search_asking_suburb") {
+        const index = parseInt(text.replace(/[^0-9]/g, "")) - 1;
+        let selectedSuburb = "";
+
+        if (text.toUpperCase() === "ALL") {
+          selectedSuburb = ""; // Empty string for regex search all
+        } else if (!isNaN(index) && index >= 0 && index < suburbs.length) {
+          selectedSuburb = suburbs[index];
+        } else {
+          // Try to match text directly if they typed "Avondale"
+          if (suburbs.includes(text)) {
+            selectedSuburb = text;
+          } else {
+            // Invalid input
+            await sendWhatsApp(phone, "Please reply with a valid *Number* from the list or *ALL*.");
+            return Response.json({ ok: true });
+          }
+        }
+
+        // Store suburb in temp storage? We can use currentDraftId to store params separated by | or update user doc
+        // Let's use setUserDraftState's draftId param to carry state: "search|SuburbName"
+        // But draftId is used for lookup. 
+        // Better: update user doc with a temporary searchParams field.
+        // For simplicity/speed without schema change: Encode in draftId string "search|SuburbName"
+
+        const nextStateId = `search|${selectedSuburb}`;
+        await setUserDraftState(phone, "search_asking_rent", nextStateId);
+        await sendWhatsApp(phone, `Selected: ${selectedSuburb || "All Suburbs"}\n\nNow, what is your maximum *Weekly Rent* (USD)?\nReply with a number (e.g. 300) or *ANY* for no limit.`);
+        return Response.json({ ok: true });
+      }
+
+      if (user.draftStatus === "search_asking_rent") {
+        // Parse previous state from ID
+        const [_, suburb] = draftId.split("|");
+        let maxRent = Infinity;
+
+        if (text.toUpperCase() !== "ANY") {
+          const parsed = parseFloat(text.replace(/[^0-9.]/g, ""));
+          if (!isNaN(parsed)) {
+            maxRent = parsed;
+          } else {
+            await sendWhatsApp(phone, "Please enter a valid number or ANY.");
+            return Response.json({ ok: true });
+          }
+        }
+
+        // EXECUTE SEARCH
+        const rate = await canSearch(phone);
+        if (!rate.ok) return Response.json({ ok: true });
+
+        // We need a search function that filters by rent too.
+        // Existing searchListings takes a string query.
+        // We'll need to update searchListings or filter manually here.
+        // Let's call searchListings with suburb, then filter by rent in memory for now (or update query).
+
+        let results = await searchListings(suburb);
+
+        // Filter by rent
+        if (maxRent !== Infinity) {
+          results = results.filter(r => {
+            const rRent = typeof r.rent === "number" ? r.rent : 0;
+            return rRent <= maxRent;
+          });
+        }
+
+        await clearUserDraftState(phone);
+
+        const body = formatSearchResults(results, (user.credits || 0) - 1);
+        const sendRes = await sendWhatsApp(phone, body);
+        if (sendRes?.sid) {
+          await updateCredits(phone, -1);
+          await recordSearch(phone);
+        }
+        logInfo("twilio_search_flow", { phone, suburb, maxRent, results: results.length });
+        return Response.json({ ok: true });
+      }
+    }
+
+    // --- LISTING FLOW ---
     if (user.draftStatus === "asking_details_or_step") {
       await setUserDraftState(phone, "asking_title", draftId);
       await sendWhatsApp(phone, "Step 1/10: Title\nWhat is the *Title* of your listing?\n(e.g. Modern 2 Bedroom Apartment)");
