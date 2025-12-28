@@ -34,7 +34,11 @@ export const listingsSchema = {
     suburb: { bsonType: "string" },
     // rent can be int or double
     rent: { bsonType: ["int", "double"], minimum: 0 },
+    deposit: { bsonType: ["int", "double"], minimum: 0 },
+    bedrooms: { bsonType: ["int", "double", "string"] },
     contactPhone: { bsonType: "string" },
+    contactName: { bsonType: "string" },
+    address: { bsonType: "string" },
     text: { bsonType: "string" },
     type: { bsonType: "string" },
     amenities: { bsonType: "array", items: { bsonType: "string" } },

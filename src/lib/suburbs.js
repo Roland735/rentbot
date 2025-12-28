@@ -1,0 +1,22 @@
+export const suburbs = [
+  "Avondale",
+  "Belgravia",
+  "Belvedere",
+  "Borrowdale",
+  "CBD",
+  "Eastlea",
+  "Greendale",
+  "Greystone Park",
+  "Hatfield",
+  "Highlands",
+  "Mabelreign",
+  "Marlborough",
+  "Milton Park",
+  "Mount Pleasant",
+  "Msasa",
+  "Newlands",
+  "Warren Park",
+  "Waterfalls",
+  "Westgate",
+  "Willowvale"
+];

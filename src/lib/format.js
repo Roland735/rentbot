@@ -4,20 +4,24 @@ export function formatSearchResults(results, balanceAfter) {
 
   results.forEach((r, i) => {
     const rent = typeof r.rent === "number" ? r.rent : 0;
+    const deposit = typeof r.deposit === "number" ? r.deposit : 0;
     const type = r.type || "Not specified";
     const desc = r.text || r.description || "No description";
     const amenities = (Array.isArray(r.amenities) && r.amenities.length > 0)
-      ? `\nAmenities: ${r.amenities.join(", ")}`
-      : "";
+      ? r.amenities.join(", ")
+      : "None listed";
 
     lines.push(
       `\n${i + 1}. Listing Details\n` +
       `Title: ${r.title || "Untitled"}\n` +
-      `Suburb: ${r.suburb || "No location"}\n` +
-      `Rent: $${rent} (Weekly)\n` +
       `Type: ${type}\n` +
-      `Description: ${desc}${amenities}\n` +
-      `Contact: ${r.contactPhone || r.ownerPhone || ""} (ID: ${r.id})`
+      `Address: ${r.address || r.suburb || "No address"}\n` +
+      `Rent: $${rent} (Weekly)\n` +
+      `Deposit: $${deposit}\n` +
+      `Bedrooms: ${r.bedrooms || "N/A"}\n` +
+      `Key features / Amenities: ${amenities}\n` +
+      `Contact name: ${r.contactName || "Owner"}\n` +
+      `Contact phone (WhatsApp): ${r.contactPhone || r.ownerPhone || ""} (ID: ${r.id})`
     );
   });
 
