@@ -68,13 +68,17 @@ export async function createPush({ phone, amount, reference, email }) {
           });
           setTimeout(async () => {
             try {
+              console.log("[Paynow Simulation] Attempting fetch to:", `${BASE_URL}/api/paynow/webhook`);
               const res = await fetch(`${BASE_URL}/api/paynow/webhook`, {
                 method: "POST",
                 headers: { "Content-Type": "application/x-www-form-urlencoded" },
                 body: form.toString()
               });
-              logInfo("paynow_test_webhook_sent", { reference, status, ok: res.ok });
+              const text = await res.text();
+              console.log("[Paynow Simulation] Response:", res.status, text);
+              logInfo("paynow_test_webhook_sent", { reference, status, ok: res.ok, statusText: res.statusText });
             } catch (err) {
+              console.error("[Paynow Simulation] Fetch Error:", err);
               logError("paynow_test_webhook_error", { reference, status, error: err?.message || String(err) });
             }
           }, delayMs);
