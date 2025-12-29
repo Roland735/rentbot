@@ -174,7 +174,7 @@ export async function POST(req) {
       // Initiate Paynow
       const amount = 0.50;
       const reference = `PUB-${listingId}-${Date.now()}`;
-      const res = await createPush({ phone, amount, reference, email: "customer@rentbot.co.zw" });
+      const res = await createPush({ phone, amount, reference });
 
       if (res.ok) {
         await addTransaction({
@@ -208,7 +208,7 @@ export async function POST(req) {
       }
 
       const reference = `CRD-${Date.now()}`;
-      const res = await createPush({ phone, amount, reference, email: "customer@rentbot.co.zw" });
+      const res = await createPush({ phone, amount, reference });
 
       if (res.ok) {
         await addTransaction({
