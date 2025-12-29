@@ -4,6 +4,8 @@ import { logInfo, logError } from "./log";
 const PAYNOW_INTEGRATION_ID = (process.env.PAYNOW_INTEGRATION_ID || process.env.PAYNOW_API_KEY || "").trim();
 const PAYNOW_INTEGRATION_KEY = (process.env.PAYNOW_INTEGRATION_KEY || process.env.PAYNOW_API_SECRET || "").trim();
 const PAYNOW_EMAIL = (process.env.PAYNOW_EMAIL || "customer@rentbot.co.zw").trim();
+const TEST_MODE = String(process.env.PAYNOW_TEST_MODE || "").toLowerCase() === "true";
+const BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000").trim();
 
 // Debug log to verify credentials
 console.log('[Paynow] Initializing with ID:', PAYNOW_INTEGRATION_ID);
@@ -40,6 +42,51 @@ export async function createPush({ phone, amount, reference, email }) {
     if (mobileNumber.startsWith("071")) method = "onemoney";
 
     logInfo("paynow_init", { reference, amount, phone: mobileNumber, method });
+
+    if (TEST_MODE) {
+      const simulate = async (status, delayMs) => {
+        try {
+          const form = new URLSearchParams({
+            reference,
+            status,
+            pollurl: `TEST-${reference}`,
+            paynowreference: `TEST-${reference}`,
+            amount: String(amount)
+          });
+          setTimeout(async () => {
+            try {
+              const res = await fetch(`${BASE_URL}/api/paynow/webhook`, {
+                method: "POST",
+                headers: { "Content-Type": "application/x-www-form-urlencoded" },
+                body: form.toString()
+              });
+              logInfo("paynow_test_webhook_sent", { reference, status, ok: res.ok });
+            } catch (err) {
+              logError("paynow_test_webhook_error", { reference, status, error: err?.message || String(err) });
+            }
+          }, delayMs);
+        } catch (err) {
+          logError("paynow_test_prepare_error", { reference, status, error: err?.message || String(err) });
+        }
+      };
+
+      if (mobileNumber === "0771111111") {
+        await simulate("Paid", 5000);
+        return { ok: true, providerRef: `TEST-${reference}`, instructions: "Simulated SUCCESS in 5s" };
+      }
+      if (mobileNumber === "0772222222") {
+        await simulate("Paid", 30000);
+        return { ok: true, providerRef: `TEST-${reference}`, instructions: "Simulated SUCCESS in 30s" };
+      }
+      if (mobileNumber === "0773333333") {
+        await simulate("Failed", 30000);
+        return { ok: true, providerRef: `TEST-${reference}`, instructions: "Simulated FAILED in 30s" };
+      }
+      if (mobileNumber === "0774444444") {
+        return { ok: false, error: "Insufficient balance" };
+      }
+      // If in TEST_MODE but number isn't one of the special cases, fall through to real API.
+    }
 
     // The 'paynow' package might have a bug where response.error is sometimes undefined or an object
     // when using sendMobile, OR it's failing internally.
