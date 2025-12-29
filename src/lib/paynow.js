@@ -7,6 +7,18 @@ const PAYNOW_EMAIL = (process.env.PAYNOW_EMAIL || "customer@rentbot.co.zw").trim
 const TEST_MODE = String(process.env.PAYNOW_TEST_MODE || "").toLowerCase() === "true";
 const BASE_URL = (process.env.NEXT_PUBLIC_BASE_URL || "http://localhost:3000").trim();
 
+function pickTestNumber(reference, amount) {
+  if (String(reference).startsWith("PUB-")) return "0772222222";
+  if (String(reference).startsWith("CRD-")) {
+    const a = Number(amount) || 0;
+    if (a % 5 === 0 && a !== 0) return "0774444444";
+    if (a % 4 === 0 && a !== 0) return "0773333333";
+    if (a % 2 === 0) return "0772222222";
+    return "0771111111";
+  }
+  return "0771111111";
+}
+
 // Debug log to verify credentials
 console.log('[Paynow] Initializing with ID:', PAYNOW_INTEGRATION_ID);
 
@@ -31,6 +43,7 @@ export async function createPush({ phone, amount, reference, email }) {
     // Sanitize phone for Ecocash/OneMoney
     // Paynow expects 077... or 071... format usually
     let mobileNumber = phone.replace(/^\+263/, "0").replace(/\s+/g, "");
+    if (TEST_MODE) mobileNumber = pickTestNumber(reference, amount);
 
     // Basic validation for Zimbabwe mobile numbers
     if (!/^07\d{8}$/.test(mobileNumber)) {
