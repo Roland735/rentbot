@@ -1,6 +1,6 @@
 import { updateCredits } from "@/lib/store";
 import { getDb } from "@/lib/db";
-import { sendWhatsApp } from "@/lib/twilio";
+import { sendWhatsApp } from "@/lib/whatchimp";
 import { formatReceipt } from "@/lib/format";
 import { logInfo, logError } from "@/lib/log";
 

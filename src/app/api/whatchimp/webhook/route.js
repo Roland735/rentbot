@@ -1,0 +1,494 @@
+import { ensureUser, searchListings, createPhotoRequest, getPendingPhotoRequest, updateCredits, confirmPhotoRequest, createListingDraft, createModerationTicket, getUser, setOptOut, getListingById, setUserDraftState, clearUserDraftState, updateListingDraft, getListingCountsBySuburb, saveSearchResults, addTransaction } from "@/lib/store";
+import { sendWhatsApp } from "@/lib/whatchimp";
+import { formatSearchResults, formatPhotosRequest, formatInsufficientCredits, formatHelp, formatListingDraft, formatWelcome } from "@/lib/format";
+import { canSearch, recordSearch, canPhotos, recordPhotos } from "@/lib/rate";
+import { logInfo, logError } from "@/lib/log";
+import { suburbs } from "@/lib/suburbs";
+import { createPush } from "@/lib/paynow";
+
+async function parse(req) {
+  let body;
+  const contentType = req.headers.get("content-type") || "";
+
+  try {
+    if (contentType.includes("application/json")) {
+      body = await req.json();
+    } else if (contentType.includes("form")) {
+      const formData = await req.formData();
+      body = Object.fromEntries([...formData.entries()]);
+    } else {
+      const text = await req.text();
+      try { body = JSON.parse(text); } catch { body = { text }; }
+    }
+  } catch (e) {
+    logError("webhook_parse_error", e);
+    return null;
+  }
+
+  logInfo("whatchimp_webhook_payload", body);
+
+  // Adapt to WhatChimp or Generic Payload
+  // We prioritize fields that look like a phone number and message
+  const phoneRaw = body.phone || body.from || body.sender || body.number || body.wa_id || body.contact?.wa_id || "";
+  const phone = String(phoneRaw).replace(/[^0-9]/g, "");
+
+  const textRaw = body.message || body.body || body.text || body.content || (body.messages?.[0]?.text?.body) || "";
+  const text = String(textRaw).trim();
+
+  if (!phone) return null;
+
+  const command = text.split(/\s+/)[0].toUpperCase();
+  const rest = text.slice(command.length).trim();
+
+  return { phone, command, rest, raw: body };
+}
+
+export async function GET(req) {
+  // Simple health check / verification endpoint
+  return new Response("WhatChimp Webhook Active", { status: 200 });
+}
+
+export async function POST(req) {
+  const parsed = await parse(req);
+  if (!parsed) {
+    // Return 200 even if parse fails, to allow "Verify Connection" tests to pass
+    // Log the error so we can inspect the payload
+    logError("webhook_parse_failed_but_acknowledged", { url: req.url });
+    return Response.json({ ok: true, note: "Could not parse message, but acknowledged." }, { status: 200 });
+  }
+
+  const { phone, command, rest } = parsed;
+
+  await ensureUser(phone);
+  const user = await getUser(phone);
+
+  if (user?.optedOut && command !== "HELP") return Response.json({ ok: true });
+
+  if (command === "SEARCH") {
+    if (!user || user.credits < 1) {
+      await sendWhatsApp(phone, formatInsufficientCredits(1));
+      return Response.json({ ok: true });
+    }
+
+    await setUserDraftState(phone, "search_asking_suburb", "search");
+
+    const counts = await getListingCountsBySuburb();
+    const suburbList = suburbs.map((s, i) => {
+      const data = counts[s] || { count: 0, hasPhotos: false };
+      const photoIcon = data.hasPhotos ? " 📷" : "";
+      return `${i + 1}. ${s} (${data.count})${photoIcon}`;
+    }).join("\n");
+
+    await sendWhatsApp(phone, `*Search Listings*\nReply with the *Number* of the suburb you want to search in:\n(Count) shows available listings.\n📷 means photos are available.\n\n${suburbList}\n\nOr reply *ALL* to search everywhere.`);
+    return Response.json({ ok: true });
+  }
+
+  // Handle Photos (ID or Index)
+  let photoIdRequest = null;
+  if (command === "PHOTOS" || command === "P") {
+    const param = rest.split(/\s+/)[0];
+    const idx = parseInt(param);
+    if (!isNaN(idx) && user.lastSearchResults && user.lastSearchResults[idx - 1]) {
+      photoIdRequest = user.lastSearchResults[idx - 1];
+    } else {
+      photoIdRequest = param;
+    }
+  } else if (!isNaN(parseInt(command)) && user.lastSearchResults) {
+    // Shortcut: Just typing the number
+    const idx = parseInt(command);
+    if (user.lastSearchResults[idx - 1]) {
+      photoIdRequest = user.lastSearchResults[idx - 1];
+    }
+  }
+
+  if (photoIdRequest) {
+    const id = photoIdRequest;
+    const rate = await canPhotos(phone);
+    if (!rate.ok) return Response.json({ ok: true });
+    await createPhotoRequest(phone, id);
+    await sendWhatsApp(phone, formatPhotosRequest(id));
+    await recordPhotos(phone);
+    logInfo("whatchimp_photos_request", { phone, id });
+    return Response.json({ ok: true });
+  }
+
+  if (command === "YES") {
+    const pending = await getPendingPhotoRequest(phone);
+    if (pending) {
+      const listing = await getListingById(pending.listingId);
+      const media = Array.isArray(listing?.external_images) ? listing.external_images.slice(0, 3) : [];
+      const success = await updateCredits(phone, -2);
+      if (success) {
+        await confirmPhotoRequest(phone);
+        await sendWhatsApp(phone, media.length ? "Photos attached." : "No images available — sending listing link.", media);
+        logInfo("whatchimp_photos_confirm", { phone, id: pending.listingId, media: media.length });
+      } else {
+        await sendWhatsApp(phone, formatInsufficientCredits(2));
+      }
+    }
+    return Response.json({ ok: true });
+  }
+
+  if (command === "REPORT") {
+    const [listingId, ...rs] = rest.split(/\s+/);
+    await createModerationTicket(phone, listingId, rs.join(" "));
+    return Response.json({ ok: true });
+  }
+
+  if (command === "LIST") {
+    // Try to parse "One-Shot" input if the user provided arguments
+    // Format: LIST Title, Suburb, Rent, Type, Description
+    if (rest.length > 5 && (rest.includes(",") || rest.includes("\n"))) {
+      const parts = rest.split(/[,;\n]+/).map(s => s.trim()).filter(s => s.length > 0);
+      if (parts.length >= 4) {
+        // Assume order: Title, Suburb, Rent, Type, Description (optional)
+        const [title, suburb, rentStr, type, ...descParts] = parts;
+        const rent = parseFloat(rentStr.replace(/[^0-9.]/g, ""));
+        const description = descParts.join(" ");
+
+        if (!isNaN(rent)) {
+          const listing = await createListingDraft(phone, {
+            title, suburb, rent, type, description: description || title
+          });
+          await sendWhatsApp(phone, formatListingDraft(listing.id));
+          return Response.json({ ok: true });
+        }
+      }
+    }
+
+    // Start conversational flow
+    const listing = await createListingDraft(phone, {});
+    await setUserDraftState(phone, "asking_details_or_step", listing.id);
+    await sendWhatsApp(phone, "To list your property, reply *STEP* to start the step-by-step process.");
+    logInfo("whatchimp_list_start", { phone, draftId: listing.id });
+    return Response.json({ ok: true });
+  }
+
+  if (command === "BUY") {
+    // BUY LIST <ID>
+    if (rest.startsWith("LIST")) {
+      const parts = rest.split(/\s+/);
+      const listingId = parts[1];
+      if (!listingId) {
+        await sendWhatsApp(phone, "Please specify the Listing ID. e.g. BUY LIST RNT-12345");
+        return Response.json({ ok: true });
+      }
+
+      const listing = await getListingById(listingId);
+      if (!listing) {
+        await sendWhatsApp(phone, "Listing not found.");
+        return Response.json({ ok: true });
+      }
+      if (listing.ownerPhone !== phone) {
+        await sendWhatsApp(phone, "You can only publish your own listings.");
+        return Response.json({ ok: true });
+      }
+      if (listing.published) {
+        await sendWhatsApp(phone, "This listing is already published.");
+        return Response.json({ ok: true });
+      }
+
+      // Initiate Paynow
+      const amount = 0.50;
+      const reference = `PUB-${listingId}-${Date.now()}`;
+      const res = await createPush({ phone, amount, reference });
+
+      if (res.ok) {
+        await addTransaction({
+          reference,
+          phone,
+          product: "listing_publish",
+          amount,
+          providerRef: res.providerRef,
+          status: "pending",
+          listingId,
+          createdAt: new Date()
+        });
+        await sendWhatsApp(phone, `Payment initiated ($${amount}).\n\nPlease check your phone now and enter your PIN to confirm.\n\nOnce paid, your listing will be live automatically.`);
+      } else {
+        const errorMsg = res.error?.includes("Invalid mobile number")
+          ? "Payment failed: Please use a valid Zimbabwe Ecocash/OneMoney number."
+          : "Payment initiation failed. Please try again later.";
+        await sendWhatsApp(phone, errorMsg);
+        logInfo("paynow_init_fail", { phone, error: res.error });
+      }
+      return Response.json({ ok: true });
+    }
+
+    // BUY CREDITS <AMOUNT>
+    if (rest.startsWith("CREDITS")) {
+      const parts = rest.split(/\s+/);
+      const amount = parseFloat(parts[1]);
+      if (isNaN(amount) || amount < 1) {
+        await sendWhatsApp(phone, "Please specify a valid amount. e.g. BUY CREDITS 5");
+        return Response.json({ ok: true });
+      }
+
+      const reference = `CRD-${Date.now()}`;
+      const res = await createPush({ phone, amount, reference });
+
+      if (res.ok) {
+        await addTransaction({
+          reference,
+          phone,
+          product: `credits_${amount}`,
+          amount,
+          providerRef: res.providerRef,
+          status: "pending",
+          createdAt: new Date()
+        });
+        await sendWhatsApp(phone, `Payment initiated ($${amount}).\n\nPlease check your phone now and enter your PIN to confirm.\n\nOnce paid, your credits will be added.`);
+      } else {
+        const errorMsg = res.error?.includes("Invalid mobile number")
+          ? "Payment failed: Please use a valid Zimbabwe Ecocash/OneMoney number."
+          : "Payment initiation failed. Please try again later.";
+        await sendWhatsApp(phone, errorMsg);
+        logInfo("paynow_init_fail", { phone, error: res.error });
+      }
+      return Response.json({ ok: true });
+    }
+
+    await sendWhatsApp(phone, "To publish a listing, reply: BUY LIST <ID>\nTo buy credits, reply: BUY CREDITS <AMOUNT>");
+    return Response.json({ ok: true });
+  }
+
+  if (command === "STOP") {
+    await setOptOut(phone, true);
+    await clearUserDraftState(phone);
+    await sendWhatsApp(phone, "You have been opted out.");
+    return Response.json({ ok: true });
+  }
+
+  // Handle Conversational States
+  if (user?.draftStatus && user?.currentDraftId) {
+    const draftId = user.currentDraftId;
+    const text = (parsed.raw.message || parsed.raw.body || parsed.raw.text || parsed.raw.content || command + (rest ? " " + rest : "")).trim();
+
+    if (text.toUpperCase() === "CANCEL") {
+      await clearUserDraftState(phone);
+      await sendWhatsApp(phone, "Action canceled.");
+      return Response.json({ ok: true });
+    }
+
+    if (text.toUpperCase() === "BACK") {
+      // Reuse logic from twilio webhook if possible, or copy-paste
+      // For brevity, copying the logic structure
+      const prev = {
+        "asking_type": "asking_title",
+        "asking_suburb": "asking_type",
+        "asking_address": "asking_suburb",
+        "asking_rent": "asking_address",
+        "asking_deposit": "asking_rent",
+        "asking_bedrooms": "asking_deposit",
+        "asking_amenities": "asking_bedrooms",
+        "asking_contact_name": "asking_amenities",
+        "asking_contact_phone": "asking_contact_name",
+        "search_asking_rent": "search_asking_suburb"
+      }[user.draftStatus];
+
+      if (prev) {
+        if (prev === "search_asking_suburb") {
+          await setUserDraftState(phone, prev, "search");
+          const counts = await getListingCountsBySuburb();
+          const suburbList = suburbs.map((s, i) => {
+            const data = counts[s] || { count: 0, hasPhotos: false };
+            const photoIcon = data.hasPhotos ? " 📷" : "";
+            return `${i + 1}. ${s} (${data.count})${photoIcon}`;
+          }).join("\n");
+          await sendWhatsApp(phone, `*Search Listings*\nReply with the *Number* of the suburb you want to search in:\n(Count) shows available listings.\n📷 means photos are available.\n\n${suburbList}\n\nOr reply *ALL* to search everywhere.`);
+        } else {
+          await setUserDraftState(phone, prev, draftId);
+          let prompt = "";
+          if (prev === "asking_title") prompt = "Step 1/10: Title\nWhat is the *Title* of your listing?\n(e.g. Modern 2 Bedroom Apartment)";
+          else if (prev === "asking_type") prompt = "Step 2/10: Type\nWhat *Type* of property is it?\n(e.g. Apartment, House, Shop, Office)";
+          else if (prev === "asking_suburb") {
+            const suburbList = suburbs.map((s, i) => `${i + 1}. ${s}`).join("\n");
+            prompt = `Step 3/10: Suburb\nReply with the *Number* of the suburb:\n\n${suburbList}`;
+          }
+          else if (prev === "asking_address") prompt = "Step 4/10: Address\nWhat is the specific *Address*? (e.g. 123 Samora Machel Ave)";
+          else if (prev === "asking_rent") prompt = "Step 5/10: Rent\nWhat is the *Weekly Rent* in USD? (Number only)";
+          else if (prev === "asking_deposit") prompt = "Step 6/10: Deposit\nWhat is the *Deposit* amount in USD? (Number only, reply 0 if none)";
+          else if (prev === "asking_bedrooms") prompt = "Step 7/10: Bedrooms\nHow many *Bedrooms*? (e.g. 1, 2, Studio)";
+          else if (prev === "asking_amenities") prompt = "Step 8/10: Key Features / Amenities\nList them separated by commas (e.g. WiFi, Borehole, Solar).";
+          else if (prev === "asking_contact_name") prompt = "Step 9/10: Contact Name\nWho is the contact person?";
+
+          if (prompt) await sendWhatsApp(phone, prompt);
+        }
+        return Response.json({ ok: true });
+      }
+    }
+
+    if (draftId.startsWith("search")) {
+      if (user.draftStatus === "search_asking_suburb") {
+        const index = parseInt(text.replace(/[^0-9]/g, "")) - 1;
+        let selectedSuburb = "";
+
+        if (text.toUpperCase() === "ALL") {
+          selectedSuburb = "";
+        } else if (!isNaN(index) && index >= 0 && index < suburbs.length) {
+          selectedSuburb = suburbs[index];
+        } else {
+          if (suburbs.includes(text)) {
+            selectedSuburb = text;
+          } else {
+            await sendWhatsApp(phone, "Please reply with a valid *Number* from the list or *ALL*.");
+            return Response.json({ ok: true });
+          }
+        }
+
+        const nextStateId = `search|${selectedSuburb}`;
+        await setUserDraftState(phone, "search_asking_rent", nextStateId);
+        await sendWhatsApp(phone, `Selected: ${selectedSuburb || "All Suburbs"}\n\nNow, what is your maximum *Weekly Rent* (USD)?\nReply with a number (e.g. 300) or *ANY* for no limit.`);
+        return Response.json({ ok: true });
+      }
+
+      if (user.draftStatus === "search_asking_rent") {
+        const [_, suburb] = draftId.split("|");
+        let maxRent = Infinity;
+
+        if (text.toUpperCase() !== "ANY") {
+          const parsed = parseFloat(text.replace(/[^0-9.]/g, ""));
+          if (!isNaN(parsed)) {
+            maxRent = parsed;
+          } else {
+            await sendWhatsApp(phone, "Please enter a valid number or ANY.");
+            return Response.json({ ok: true });
+          }
+        }
+
+        const rate = await canSearch(phone);
+        if (!rate.ok) return Response.json({ ok: true });
+
+        let results = await searchListings(suburb);
+        if (maxRent !== Infinity) {
+          results = results.filter(r => {
+            const rRent = typeof r.rent === "number" ? r.rent : 0;
+            return rRent <= maxRent;
+          });
+        }
+
+        await clearUserDraftState(phone);
+
+        const body = formatSearchResults(results, (user.credits || 0) - 1);
+        const sendRes = await sendWhatsApp(phone, body);
+        if (sendRes?.ok !== false) { // Assuming ok:true or similar
+          await updateCredits(phone, -1);
+          await recordSearch(phone);
+        }
+        logInfo("whatchimp_search_flow", { phone, suburb, maxRent, results: results.length });
+        return Response.json({ ok: true });
+      }
+    }
+
+    if (user.draftStatus === "asking_details_or_step") {
+      await setUserDraftState(phone, "asking_title", draftId);
+      await sendWhatsApp(phone, "Step 1/10: Title\nWhat is the *Title* of your listing?\n(e.g. Modern 2 Bedroom Apartment)");
+      return Response.json({ ok: true });
+    }
+
+    if (user.draftStatus === "asking_title") {
+      await updateListingDraft(draftId, { title: text });
+      await setUserDraftState(phone, "asking_type", draftId);
+      await sendWhatsApp(phone, "Step 2/10: Type\nWhat *Type* of property is it?\n(e.g. Apartment, House, Shop, Office)\n(Reply BACK to go back)");
+      return Response.json({ ok: true });
+    }
+
+    if (user.draftStatus === "asking_type") {
+      await updateListingDraft(draftId, { type: text });
+      await setUserDraftState(phone, "asking_suburb", draftId);
+      const suburbList = suburbs.map((s, i) => `${i + 1}. ${s}`).join("\n");
+      await sendWhatsApp(phone, `Step 3/10: Suburb\nReply with the *Number* of the suburb:\n\n${suburbList}\n\n(Reply BACK to go back)`);
+      return Response.json({ ok: true });
+    }
+
+    if (user.draftStatus === "asking_suburb") {
+      const index = parseInt(text.replace(/[^0-9]/g, "")) - 1;
+      let selectedSuburb = text;
+      if (!isNaN(index) && index >= 0 && index < suburbs.length) {
+        selectedSuburb = suburbs[index];
+      } else {
+        if (suburbs.includes(text)) {
+          selectedSuburb = text;
+        }
+      }
+      await updateListingDraft(draftId, { suburb: selectedSuburb });
+      await setUserDraftState(phone, "asking_address", draftId);
+      await sendWhatsApp(phone, "Step 4/10: Address\nWhat is the specific *Address*? (e.g. 123 Samora Machel Ave)\n(Reply BACK to go back)");
+      return Response.json({ ok: true });
+    }
+
+    if (user.draftStatus === "asking_address") {
+      await updateListingDraft(draftId, { address: text });
+      await setUserDraftState(phone, "asking_rent", draftId);
+      await sendWhatsApp(phone, "Step 5/10: Rent\nWhat is the *Weekly Rent* in USD? (Number only)\n(Reply BACK to go back)");
+      return Response.json({ ok: true });
+    }
+
+    if (user.draftStatus === "asking_rent") {
+      const rent = parseFloat(text.replace(/[^0-9.]/g, ""));
+      if (isNaN(rent)) {
+        await sendWhatsApp(phone, "Please enter a valid number for rent.");
+        return Response.json({ ok: true });
+      }
+      await updateListingDraft(draftId, { rent });
+      await setUserDraftState(phone, "asking_deposit", draftId);
+      await sendWhatsApp(phone, "Step 6/10: Deposit\nWhat is the *Deposit* amount in USD? (Number only, reply 0 if none)\n(Reply BACK to go back)");
+      return Response.json({ ok: true });
+    }
+
+    if (user.draftStatus === "asking_deposit") {
+      const deposit = parseFloat(text.replace(/[^0-9.]/g, ""));
+      if (isNaN(deposit)) {
+        await sendWhatsApp(phone, "Please enter a valid number for deposit.");
+        return Response.json({ ok: true });
+      }
+      await updateListingDraft(draftId, { deposit });
+      await setUserDraftState(phone, "asking_bedrooms", draftId);
+      await sendWhatsApp(phone, "Step 7/10: Bedrooms\nHow many *Bedrooms*? (e.g. 1, 2, Studio)\n(Reply BACK to go back)");
+      return Response.json({ ok: true });
+    }
+
+    if (user.draftStatus === "asking_bedrooms") {
+      await updateListingDraft(draftId, { bedrooms: text });
+      await setUserDraftState(phone, "asking_amenities", draftId);
+      await sendWhatsApp(phone, "Step 8/10: Key Features / Amenities\nList them separated by commas (e.g. WiFi, Borehole, Solar).\n(Reply BACK to go back)");
+      return Response.json({ ok: true });
+    }
+
+    if (user.draftStatus === "asking_amenities") {
+      let amenities = [];
+      if (text.toUpperCase() !== "NONE") {
+        amenities = text.split(",").map(s => s.trim()).filter(s => s.length > 0);
+      }
+      await updateListingDraft(draftId, { amenities, description: text });
+      await setUserDraftState(phone, "asking_contact_name", draftId);
+      await sendWhatsApp(phone, "Step 9/10: Contact Name\nWho is the contact person?\n(Reply BACK to go back)");
+      return Response.json({ ok: true });
+    }
+
+    if (user.draftStatus === "asking_contact_name") {
+      await updateListingDraft(draftId, { contactName: text });
+      await setUserDraftState(phone, "asking_contact_phone", draftId);
+      await sendWhatsApp(phone, "Step 10/10: Contact Phone\nEnter the WhatsApp number (e.g. +263...). Reply *SAME* to use your current number.\n(Reply BACK to go back)");
+      return Response.json({ ok: true });
+    }
+
+    if (user.draftStatus === "asking_contact_phone") {
+      let contactPhone = text;
+      if (text.toUpperCase() === "SAME") {
+        contactPhone = phone;
+      }
+      await updateListingDraft(draftId, { contactPhone });
+      await clearUserDraftState(phone);
+      await sendWhatsApp(phone, formatListingDraft(draftId));
+      return Response.json({ ok: true });
+    }
+  }
+
+  if (command === "HELP" || command === "HI" || command === "HELLO") {
+    await sendWhatsApp(phone, formatWelcome(user?.credits ?? 0));
+    return Response.json({ ok: true });
+  }
+
+  return Response.json({ ok: true });
+}
