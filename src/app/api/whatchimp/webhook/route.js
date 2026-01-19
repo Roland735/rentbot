@@ -73,6 +73,7 @@ export async function POST(req) {
   if (user?.optedOut && command !== "HELP") return Response.json({ ok: true });
 
   if (command === "SEARCH") {
+    console.log("Searching")
     if (!user || user.credits < 1) {
       await sendWhatsApp(phone, formatInsufficientCredits(1));
       return Response.json({ ok: true });
