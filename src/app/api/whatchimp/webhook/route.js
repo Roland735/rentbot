@@ -27,12 +27,26 @@ async function parse(req) {
 
   logInfo("whatchimp_webhook_payload", body);
 
-  // Adapt to WhatChimp or Generic Payload
-  // We prioritize fields that look like a phone number and message
-  const phoneRaw = body.phone || body.from || body.sender || body.number || body.wa_id || body.contact?.wa_id || "";
-  const phone = String(phoneRaw).replace(/[^0-9]/g, "");
+  // Helper to safely get nested property
+  const get = (obj, path) => path.split('.').reduce((acc, part) => acc && acc[part], obj);
 
-  const textRaw = body.message || body.body || body.text || body.content || (body.messages?.[0]?.text?.body) || "";
+  // 1. Try Standard WhatsApp Cloud API structure (nested in WhatChimp payload)
+  // Payload structure: body.data.data.value.messages[0]
+  const waMessage = get(body, "data.data.value.messages.0") || get(body, "entry.0.changes.0.value.messages.0");
+
+  let phoneRaw = "";
+  let textRaw = "";
+
+  if (waMessage) {
+    phoneRaw = waMessage.from;
+    textRaw = waMessage.text?.body || "";
+  } else {
+    // 2. Try Generic/Flat Fallbacks
+    phoneRaw = body.phone || body.from || body.sender || body.number || body.wa_id || body.contact?.wa_id || "";
+    textRaw = body.message || body.body || body.text || body.content || (body.messages?.[0]?.text?.body) || "";
+  }
+
+  const phone = String(phoneRaw).replace(/[^0-9]/g, "");
   const text = String(textRaw).trim();
 
   if (!phone) return null;
