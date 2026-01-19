@@ -26,7 +26,15 @@ export async function sendWhatsApp(to, body, media = []) {
       },
       body: JSON.stringify(payload)
     });
+
+    // Debug logging
+    console.log("WhatChimp Response Status:", res.status);
+    // Clone response to read text without consuming the original stream if needed, 
+    // but here we consume it later anyway so we can just read it once if we are careful.
+    // Let's just rely on the existing logic but log the error case better.
+
   } catch (err) {
+    console.error("WhatChimp Fetch Error:", err);
     const errorText = err?.message || String(err);
     const isTls =
       errorText.includes("ERR_SSL") ||
@@ -50,7 +58,14 @@ export async function sendWhatsApp(to, body, media = []) {
   const contentType = res.headers.get("content-type") || "";
   const data = contentType.includes("application/json") ? await res.json() : await res.text();
 
-  if (!res.ok) return { ok: false, error: data };
+  if (!res.ok) {
+    console.error("WhatChimp API Error Body:", data);
+    return { ok: false, error: data };
+  }
+
+  // Log success body for debugging
+  console.log("WhatChimp Success Body:", JSON.stringify(data));
+
   if (typeof data === "string" && data.toLowerCase().includes("<html")) {
     return { ok: false, error: "Unexpected HTML response (likely wrong endpoint)" };
   }

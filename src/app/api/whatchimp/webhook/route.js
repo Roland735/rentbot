@@ -168,8 +168,12 @@ export async function POST(req) {
     // Start conversational flow
     const listing = await createListingDraft(phone, {});
     await setUserDraftState(phone, "asking_details_or_step", listing.id);
-    await sendWhatsApp(phone, "To list your property, reply *STEP* to start the step-by-step process.");
-    logInfo("whatchimp_list_start", { phone, draftId: listing.id });
+    const sendRes = await sendWhatsApp(phone, "To list your property, reply *STEP* to start the step-by-step process.");
+    if (!sendRes.ok) {
+      logError("whatchimp_list_start_failed", sendRes.error, { phone });
+    } else {
+      logInfo("whatchimp_list_start", { phone, draftId: listing.id });
+    }
     return Response.json({ ok: true });
   }
 
