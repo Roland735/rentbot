@@ -27,11 +27,8 @@ async function parse(req) {
 
   logInfo("whatchimp_webhook_payload", body);
 
-  // Helper to safely get nested property
   const get = (obj, path) => path.split('.').reduce((acc, part) => acc && acc[part], obj);
 
-  // 1. Try Standard WhatsApp Cloud API structure (nested in WhatChimp payload)
-  // Payload structure: body.data.data.value.messages[0]
   const waMessage = get(body, "data.data.value.messages.0") || get(body, "entry.0.changes.0.value.messages.0");
 
   let phoneRaw = "";
@@ -49,7 +46,7 @@ async function parse(req) {
   const phone = String(phoneRaw).replace(/[^0-9]/g, "");
   const text = String(textRaw).trim();
 
-  if (!phone) return null;
+  if (!phone || !text) return null;
 
   const command = text.split(/\s+/)[0].toUpperCase();
   const rest = text.slice(command.length).trim();
@@ -58,17 +55,14 @@ async function parse(req) {
 }
 
 export async function GET(req) {
-  // Simple health check / verification endpoint
   return new Response("WhatChimp Webhook Active", { status: 200 });
 }
 
 export async function POST(req) {
   const parsed = await parse(req);
   if (!parsed) {
-    // Return 200 even if parse fails, to allow "Verify Connection" tests to pass
-    // Log the error so we can inspect the payload
-    logError("webhook_parse_failed_but_acknowledged", { url: req.url });
-    return Response.json({ ok: true, note: "Could not parse message, but acknowledged." }, { status: 200 });
+    logError("whatchimp_webhook_parse_failed", "missing_phone_or_text", { url: req.url });
+    return Response.json({ ok: true }, { status: 200 });
   }
 
   const { phone, command, rest } = parsed;

@@ -1,46 +1,32 @@
-const ACCESS_TOKEN = process.env.WHATCHIMP_ACCESS_TOKEN;
-const API_URL = process.env.WHATCHIMP_API_URL; // e.g., https://api.whatchimp.com/v1/send
+const ACCESS_TOKEN = (process.env.WHATCHIMP_ACCESS_TOKEN || "").trim();
+const API_URL = (process.env.WHATCHIMP_API_URL || "").trim();
 
-/**
- * Sends a WhatsApp message using WhatChimp API
- * @param {string} to - The recipient's phone number (e.g., +263...)
- * @param {string} body - The text message body
- * @param {string[]} media - Array of media URLs (optional)
- */
 export async function sendWhatsApp(to, body, media = []) {
-  if (!ACCESS_TOKEN) {
-    console.error("Missing WHATCHIMP_ACCESS_TOKEN");
-    return { ok: false, error: "Missing configuration" };
-  }
+  if (!ACCESS_TOKEN) return { ok: false, error: "Missing WHATCHIMP_ACCESS_TOKEN" };
+  if (!API_URL) return { ok: false, error: "Missing WHATCHIMP_API_URL" };
 
-  // Sanitize number: remove + and spaces
-  const recipient = to.replace(/[^\d]/g, "");
+  const recipient = String(to || "").replace(/[^\d]/g, "");
+  if (!recipient) return { ok: false, error: "Missing recipient phone" };
 
-  // Placeholder implementation - Needs correct API Endpoint and Payload structure
-  // Based on common patterns for WhatsApp wrappers:
-  const payload = {
-    number: recipient,
-    message: body,
-    type: "text"
-  };
+  const text = String(body || "");
 
-  if (media.length > 0) {
-    payload.type = "media";
-    payload.media_url = media[0];
-    payload.caption = body;
-  }
+  const payload =
+    Array.isArray(media) && media.length > 0
+      ? { number: recipient, type: "media", media_url: media[0], caption: text }
+      : { number: recipient, type: "text", message: text };
 
   try {
     const res = await fetch(API_URL, {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${ACCESS_TOKEN}`, // or maybe 'access_token' in query?
+        Authorization: `Bearer ${ACCESS_TOKEN}`,
         "Content-Type": "application/json"
       },
       body: JSON.stringify(payload)
     });
 
-    const data = await res.json();
+    const contentType = res.headers.get("content-type") || "";
+    const data = contentType.includes("application/json") ? await res.json() : await res.text();
     if (!res.ok) {
       console.error("WhatChimp API Error:", data);
       return { ok: false, error: data };
@@ -48,11 +34,10 @@ export async function sendWhatsApp(to, body, media = []) {
     return { ok: true, data };
   } catch (err) {
     console.error("WhatChimp Fetch Error:", err);
-    return { ok: false, error: err.message };
+    return { ok: false, error: err?.message || String(err) };
   }
 }
 
 export function validateSignature(req) {
-  // TODO: Implement webhook signature verification if WhatChimp provides it
   return true;
 }

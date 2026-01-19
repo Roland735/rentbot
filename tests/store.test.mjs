@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert";
 import { MongoClient } from "mongodb";
+import { closeDb } from "../src/lib/db.js";
 import { ensureCollections } from "../src/lib/schema.js";
 import { ensureUser, getUser, updateCredits } from "../src/lib/store.js";
 
@@ -16,6 +17,7 @@ test("ensureUser creates user with 3 credits", async () => {
   const u = await ensureUser("+111");
   assert.equal(u.credits, 3);
   await client.close();
+  await closeDb();
 });
 
 test("updateCredits prevents overdraft", async () => {
@@ -34,5 +36,6 @@ test("updateCredits prevents overdraft", async () => {
   const u2 = await getUser("+222");
   assert.equal(u2.credits, 1);
   await client.close();
+  await closeDb();
 });
 

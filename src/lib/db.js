@@ -19,3 +19,10 @@ export async function getDb() {
   return db;
 }
 
+export async function closeDb() {
+  if (!client) return;
+  await client.close();
+  client = undefined;
+  ensured = false;
+}
+

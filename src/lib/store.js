@@ -11,7 +11,7 @@ export async function ensureUser(phone) {
   if (existing) return existing;
   const user = {
     phone,
-    credits: 100, // Increased default credits for testing
+    credits: 3,
     verified: false,
     role: "user",
     searchCountDay: 0,
